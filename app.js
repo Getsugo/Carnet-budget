@@ -1,5 +1,5 @@
 /* ---------- Constantes ---------- */
-const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats" };
+const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets" };
 const DEFAULT_CATS = {
   depenses: ["courses", "loisirs", "voiture", "gasoil", "salle", "cadeaux", "groupama", "resto", "canal", "maman", "autres"],
   revenus: ["salaire", "caf", "maman", "cpam", "wtw", "mamy"],
@@ -11,8 +11,9 @@ const PALETTE = ["#3F6B58","#B98B29","#7A5C7E","#2E6E7E","#B8492F","#6B7F3F","#8
 let state = {
   tx: [],
   budgets: {},
-  settings: { objectif: 60000, soldeInitial: 0 },
+  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "" },
   cats: JSON.parse(JSON.stringify(DEFAULT_CATS)),
+  assets: [], // comptes/livrets/investissements saisis manuellement : {id, nom, montant}
   month: new Date().toISOString().slice(0, 7),
   tab: "dashboard",
 };
@@ -31,6 +32,8 @@ function loadState() {
   try { const v = localStorage.getItem(LS_KEYS.budgets); if (v) state.budgets = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.settings); if (v) state.settings = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.cats); if (v) state.cats = JSON.parse(v); } catch (e) {}
+  try { const v = localStorage.getItem(LS_KEYS.assets); if (v) state.assets = JSON.parse(v); } catch (e) {}
+  if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = "";
   if (state.tx.length) { const months = state.tx.map((t) => monthKey(t.date)).sort(); state.month = months[months.length - 1]; }
 }
 function persist(part) {
@@ -38,6 +41,7 @@ function persist(part) {
   if (part === "budgets" || !part) localStorage.setItem(LS_KEYS.budgets, JSON.stringify(state.budgets));
   if (part === "settings" || !part) localStorage.setItem(LS_KEYS.settings, JSON.stringify(state.settings));
   if (part === "cats" || !part) localStorage.setItem(LS_KEYS.cats, JSON.stringify(state.cats));
+  if (part === "assets" || !part) localStorage.setItem(LS_KEYS.assets, JSON.stringify(state.assets));
 }
 
 /* ---------- Dérivées ---------- */
@@ -63,6 +67,18 @@ function getYearlySeries() {
 function getCompteActuel() {
   const cumul = state.tx.reduce((acc, t) => acc + (t.type === "revenu" ? t.montant : -t.montant), 0);
   return state.settings.soldeInitial + cumul;
+}
+function getPatrimoineTotal() {
+  const autres = state.assets.reduce((acc, a) => acc + (Number(a.montant) || 0), 0);
+  return getCompteActuel() + autres;
+}
+// Combien de mois restent avant la date objectif (mois calendaires, arrondi à l'entier supérieur)
+function getMoisRestants() {
+  if (!state.settings.dateObjectif) return null;
+  const [ty, tm] = state.settings.dateObjectif.split("-").map(Number);
+  const now = new Date();
+  const diff = (ty - now.getFullYear()) * 12 + (tm - (now.getMonth() + 1));
+  return diff;
 }
 
 /* ---------- Rendu ---------- */
@@ -207,31 +223,80 @@ function renderBudget() {
 
 function renderAnnee() {
   const series = getYearlySeries();
-  const compte = getCompteActuel();
-  const pct = Math.min(100, Math.max(0, (compte / (state.settings.objectif || 1)) * 100));
+  const compteActuel = getCompteActuel();
+  const patrimoine = getPatrimoineTotal();
+  const pct = Math.min(100, Math.max(0, (patrimoine / (state.settings.objectif || 1)) * 100));
   const maxAbs = Math.max(...series.map((s) => Math.abs(s.reste)), 1);
+  const moisRestants = getMoisRestants();
+  const manque = Math.max(0, state.settings.objectif - patrimoine);
+
+  let planHtml = "";
+  if (manque <= 0) {
+    planHtml = `<div class="goal-plan" style="color:#9FD1B0;">🎉 Objectif atteint !</div>`;
+  } else if (state.settings.dateObjectif) {
+    if (moisRestants === null) { /* no date */ }
+    else if (moisRestants <= 0) {
+      planHtml = `<div class="goal-plan" style="color:#E8A490;">La date objectif est déjà passée — ajuste-la dans les réglages.</div>`;
+    } else {
+      const parMois = manque / moisRestants;
+      planHtml = `<div class="goal-plan">Il te reste <b>${fmtEUR(manque)}</b> à épargner d'ici <span style="text-transform:capitalize;">${esc(monthLabel(state.settings.dateObjectif))}</span> (${moisRestants} mois) → soit environ <b>${fmtEUR(parMois)}</b> / mois.</div>`;
+    }
+  }
+
   return `
     <div class="card card-pad">
       <h3 class="section-title">Reste par mois</h3>
       ${series.length === 0 ? `<div class="empty">Pas encore assez de données.</div>` : `
-      <div class="yearly-bars">
-        ${series.map((s) => `
-          <div class="yearly-bar-col">
-            <div class="yearly-bar ${s.reste < 0 ? "neg" : ""}" style="height:${Math.max(2, (Math.abs(s.reste) / maxAbs) * 150)}px"></div>
-            <div class="yearly-bar-label">${esc(s.label)}</div>
-          </div>
-        `).join("")}
+      <div class="yearly-bars-wrap">
+        <div class="yearly-bars">
+          ${series.map((s) => `
+            <div class="yearly-bar-col">
+              <div class="yearly-bar ${s.reste < 0 ? "neg" : ""}" style="height:${Math.max(2, (Math.abs(s.reste) / maxAbs) * 150)}px"></div>
+              <div class="yearly-bar-label">${esc(s.label)}</div>
+            </div>
+          `).join("")}
+        </div>
       </div>`}
     </div>
 
     <div class="card dark card-pad" style="margin-top:20px;">
-      <div class="hero-label">🎯 Objectif d'épargne</div>
+      <div class="hero-label">🎯 Objectif d'épargne — patrimoine total</div>
       <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:8px;margin:6px 0;">
-        <div class="hero-amount font-mono" style="font-size:30px;">${fmtEUR(compte)}</div>
+        <div class="hero-amount font-mono" style="font-size:30px;">${fmtEUR(patrimoine)}</div>
         <div class="font-mono" style="font-size:13px;opacity:0.7;">sur ${fmtEUR(state.settings.objectif)}</div>
       </div>
       <div class="goal-progress"><div class="goal-fill" style="width:${pct}%"></div></div>
       <div class="goal-pct">${pct.toFixed(1)}%</div>
+      ${planHtml}
+    </div>
+
+    <div class="card card-pad" style="margin-top:20px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <h3 class="section-title" style="margin:0;">Mon patrimoine</h3>
+        <button class="btn btn-outline" id="addAssetBtn">+ Ajouter un compte</button>
+      </div>
+      <p class="hint" style="margin:6px 0 14px;">Ton compte courant est calculé automatiquement depuis tes transactions. Ajoute ici tes livrets, PEA / Trade République, assurance-vie, épargne BNP... et mets leur montant à jour toi-même quand tu veux.</p>
+
+      <div class="budget-row" style="padding:8px 0;border-bottom:1px dashed var(--line);">
+        <span class="name" style="text-transform:none;font-weight:600;">🏦 Compte courant <span style="font-weight:400;color:var(--ink40);">(auto)</span></span>
+        <span class="font-mono" style="font-size:14px;">${fmtEUR(compteActuel)}</span>
+      </div>
+
+      ${state.assets.length === 0 ? `<div class="empty" style="padding:16px 0 4px;">Aucun autre compte ajouté.</div>` : state.assets.map((a) => `
+        <div class="asset-row" data-asset-id="${a.id}">
+          <input type="text" class="asset-name" data-asset-field="nom" placeholder="Nom (ex : Livret A, Trade République...)" value="${esc(a.nom)}" />
+          <div class="budget-input-wrap">
+            <input type="number" step="0.01" class="asset-amount" data-asset-field="montant" value="${a.montant ?? ""}" placeholder="0" />
+            <span style="color:var(--ink40);">€</span>
+          </div>
+          <button class="tx-del" data-asset-del="${a.id}">✕</button>
+        </div>
+      `).join("")}
+
+      <div class="budget-row" style="padding-top:10px;border-top:1px solid var(--line);margin-top:6px;">
+        <span class="name" style="font-weight:600;">Total patrimoine</span>
+        <span class="font-mono" style="font-weight:600;">${fmtEUR(patrimoine)}</span>
+      </div>
     </div>
 
     <div class="card card-pad" style="margin-top:20px;">
@@ -242,11 +307,15 @@ function renderAnnee() {
           <input type="number" id="setObjectif" value="${state.settings.objectif}" />
         </div>
         <div class="field">
-          <label>Solde de départ (€)</label>
+          <label>Date butoir de l'objectif</label>
+          <input type="month" id="setDateObjectif" value="${state.settings.dateObjectif || ""}" />
+        </div>
+        <div class="field">
+          <label>Solde de départ du compte courant (€)</label>
           <input type="number" id="setSolde" value="${state.settings.soldeInitial}" />
         </div>
       </div>
-      <p class="hint" style="margin-top:14px;">Le solde actuel est calculé automatiquement : solde de départ + somme de tous les revenus et dépenses enregistrés.</p>
+      <p class="hint" style="margin-top:14px;">Le compte courant est calculé automatiquement : solde de départ + somme de tous les revenus et dépenses enregistrés. Le patrimoine total additionne ce compte courant et les comptes que tu ajoutes toi-même ci-dessus.</p>
     </div>
   `;
 }
@@ -279,8 +348,34 @@ function attachViewHandlers() {
 
   const setObjectif = document.getElementById("setObjectif");
   const setSolde = document.getElementById("setSolde");
+  const setDateObjectif = document.getElementById("setDateObjectif");
   if (setObjectif) setObjectif.onchange = () => { state.settings.objectif = parseFloat(setObjectif.value) || 0; persist("settings"); render(); };
   if (setSolde) setSolde.onchange = () => { state.settings.soldeInitial = parseFloat(setSolde.value) || 0; persist("settings"); render(); };
+  if (setDateObjectif) setDateObjectif.onchange = () => { state.settings.dateObjectif = setDateObjectif.value || ""; persist("settings"); render(); };
+
+  const addAssetBtn = document.getElementById("addAssetBtn");
+  if (addAssetBtn) addAssetBtn.onclick = () => {
+    state.assets.push({ id: uid(), nom: "", montant: 0 });
+    persist("assets");
+    render();
+    const lastInput = document.querySelector(`[data-asset-id="${state.assets[state.assets.length - 1].id}"] .asset-name`);
+    if (lastInput) lastInput.focus();
+  };
+  document.querySelectorAll("[data-asset-field]").forEach((input) => {
+    input.onchange = () => {
+      const row = input.closest("[data-asset-id]");
+      const id = row.dataset.assetId;
+      const asset = state.assets.find((a) => a.id === id);
+      if (!asset) return;
+      const field = input.dataset.assetField;
+      asset[field] = field === "montant" ? (parseFloat(input.value) || 0) : input.value;
+      persist("assets");
+      if (field === "montant") render();
+    };
+  });
+  document.querySelectorAll("[data-asset-del]").forEach((btn) => {
+    btn.onclick = () => { state.assets = state.assets.filter((a) => a.id !== btn.dataset.assetDel); persist("assets"); render(); };
+  });
 }
 
 /* ---------- Import (parseur minimal, sans dépendance externe) ---------- */

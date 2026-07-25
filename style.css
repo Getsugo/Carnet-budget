@@ -118,11 +118,18 @@ main { padding: 20px 0 100px; }
 .field label { display: block; font-size: 13px; color: var(--ink60); margin-bottom: 5px; }
 .field input, .field select { width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); font-family: var(--font-mono); font-size: 14px; }
 
-.yearly-bars { display: flex; align-items: flex-end; gap: 10px; height: 180px; padding-top: 10px; }
-.yearly-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 6px; }
+.yearly-bars-wrap { overflow-x: auto; margin: 0 -20px; padding: 0 20px 4px; }
+.yearly-bars { display: flex; align-items: flex-end; gap: 10px; height: 180px; padding-top: 10px; width: max-content; min-width: 100%; }
+.yearly-bar-col { flex: 0 0 30px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 6px; }
 .yearly-bar { width: 100%; max-width: 28px; border-radius: 5px 5px 0 0; background: var(--sage); min-height: 2px; }
 .yearly-bar.neg { background: var(--rust); }
 .yearly-bar-label { font-family: var(--font-mono); font-size: 10px; color: var(--ink40); text-transform: capitalize; }
+
+.goal-plan { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.15); font-size: 13px; line-height: 1.5; opacity: 0.9; }
+
+.asset-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.asset-name { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); font-size: 13px; }
+.asset-amount { width: 90px; }
 
 .fab { position: fixed; bottom: 22px; right: 20px; z-index: 30; background: var(--sage); color: #fff; border-radius: 999px; padding: 13px 20px; display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; box-shadow: 0 6px 20px rgba(28,43,57,0.25); }
 .fab:active { transform: scale(0.97); }
