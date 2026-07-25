@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Le Carnet — Budget</title>
+<meta name="theme-color" content="#1C2B39" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Le Carnet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="loading" class="loading-screen">chargement du carnet…</div>
+
+<div id="app" style="display:none;">
+  <header class="app-header">
+    <div class="wrap header-top">
+      <div class="brand"><span class="dot"></span> Le Carnet</div>
+      <div class="month-switch">
+        <button id="prevMonth" aria-label="Mois précédent">‹</button>
+        <span id="monthLabel" class="font-mono"></span>
+        <button id="nextMonth" aria-label="Mois suivant">›</button>
+      </div>
+    </div>
+    <nav class="wrap tabs" id="tabs">
+      <button data-tab="dashboard" class="active">Tableau de bord</button>
+      <button data-tab="transactions">Transactions</button>
+      <button data-tab="budget">Budget prévu</button>
+      <button data-tab="annee">Année &amp; objectif</button>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <div id="installBanner" class="install-banner">
+      <span>Installe Le Carnet sur ton écran d'accueil pour un accès hors-ligne.</span>
+      <button id="installBtn">Installer</button>
+    </div>
+    <div id="view"></div>
+  </main>
+
+  <button class="fab" id="fabAdd">+ Ajouter</button>
+</div>
+
+<div id="modalRoot"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
