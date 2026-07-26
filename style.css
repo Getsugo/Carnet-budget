@@ -18,8 +18,15 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-body); -webkit-tap-highlight-color: transparent; }
-button { font-family: inherit; cursor: pointer; border: none; background: none; }
-input, select { font-family: inherit; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; transition: transform 0.12s ease, background 0.15s ease, opacity 0.15s ease; }
+button:active { transform: scale(0.96); }
+input, select { font-family: inherit; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+input:focus, select:focus { outline: none; border-color: var(--sage) !important; box-shadow: 0 0 0 3px rgba(63,107,88,0.15); }
+
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.view-anim { animation: fadeInUp 0.28s cubic-bezier(0.16,1,0.3,1); }
+@keyframes popIn { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+.card { animation: popIn 0.3s cubic-bezier(0.16,1,0.3,1); }
 
 .font-display { font-family: var(--font-display); }
 .font-mono { font-family: var(--font-mono); }
@@ -32,8 +39,8 @@ header.app-header {
   border-bottom: 1px solid var(--line);
 }
 .header-top { display: flex; align-items: center; justify-content: space-between; padding: 14px 0 6px; }
-.brand { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-size: 20px; }
-.brand .dot { width: 20px; height: 20px; border-radius: 50%; background: var(--sage); display: inline-block; }
+.brand { display: flex; align-items: center; gap: 9px; font-family: var(--font-display); font-size: 20px; }
+.brand-icon { width: 28px; height: 28px; border-radius: 8px; box-shadow: 0 2px 8px rgba(28,43,57,0.28); display: block; }
 
 .month-switch { display: flex; align-items: center; gap: 4px; background: var(--paper-dim); border-radius: 999px; padding: 4px; }
 .month-switch button { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
@@ -46,8 +53,8 @@ nav.tabs button.active { background: var(--ink); color: var(--paper); }
 
 main { padding: 20px 0 100px; }
 
-.card { background: #fff; border: 1px solid var(--line); border-radius: 16px; }
-.card.dark { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.card { background: #fff; border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 1px 3px rgba(28,43,57,0.05), 0 1px 2px rgba(28,43,57,0.04); }
+.card.dark { background: var(--ink); color: var(--paper); border-color: var(--ink); box-shadow: 0 10px 30px -8px rgba(28,43,57,0.4); }
 .card-pad { padding: 20px; }
 
 .section-title { font-family: var(--font-display); font-size: 18px; margin: 0 0 14px; }
@@ -80,6 +87,16 @@ main { padding: 20px 0 100px; }
 .legend-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink60); }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
 
+.tx-icon { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+.cat-icon { display: inline-flex; align-items: center; justify-content: center; width: 20px; margin-right: 2px; }
+
+.sparkline-wrap { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12); }
+.sparkline-label { font-size: 11px; opacity: 0.6; white-space: nowrap; }
+
+.donut-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; z-index: 1; }
+.donut-center .amt { font-family: var(--font-mono); font-size: 15px; font-weight: 600; }
+.donut-center .lbl { font-size: 9px; color: var(--ink40); text-transform: uppercase; letter-spacing: 0.05em; }
+.donut-pos { position: relative; display: inline-flex; }
 .empty { font-size: 13px; color: var(--ink40); text-align: center; padding: 30px 0; }
 
 .tx-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }

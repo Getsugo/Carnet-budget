@@ -1,10 +1,12 @@
-const CACHE_NAME = "carnet-budget-v3";
+const CACHE_NAME = "carnet-budget-v4";
 const ASSETS = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
   "./manifest.json",
+  "./icons/icon-64.png",
+  "./icons/icon-180.png",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
 ];

@@ -6,6 +6,12 @@ const DEFAULT_CATS = {
 };
 const MOIS_FR = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
 const PALETTE = ["#3F6B58","#B98B29","#7A5C7E","#2E6E7E","#B8492F","#6B7F3F","#8C6239","#4A5C77","#9C5B45","#5C7A6B"];
+const CATEGORY_ICONS = {
+  courses: "🛒", loisirs: "🎉", voiture: "🚗", gasoil: "⛽", salle: "🏋️", cadeaux: "🎁",
+  groupama: "🛡️", resto: "🍽️", canal: "📺", maman: "❤️", autres: "💳", bricolage: "🔨",
+  internet: "📶", salaire: "💼", caf: "👶", cpam: "🏥", wtw: "📄", mamy: "❤️",
+};
+function categoryIcon(cat) { return CATEGORY_ICONS[(cat || "").toLowerCase()] || "💳"; }
 
 /* ---------- Etat ---------- */
 let state = {
@@ -90,6 +96,9 @@ function render() {
   else if (state.tab === "transactions") view.innerHTML = renderTransactions();
   else if (state.tab === "budget") view.innerHTML = renderBudget();
   else if (state.tab === "annee") view.innerHTML = renderAnnee();
+  view.classList.remove("view-anim");
+  void view.offsetWidth;
+  view.classList.add("view-anim");
   attachViewHandlers();
 }
 
@@ -112,6 +121,9 @@ function renderDashboard() {
   });
   gradient = gradient ? gradient.slice(0, -2) : "var(--paper-dim) 0deg 360deg";
 
+  const spark = getYearlySeries().slice(-6);
+  const sparkSvg = spark.length >= 2 ? renderSparkline(spark) : "";
+
   return `
     <div class="card dark hero">
       <div class="hero-top">
@@ -124,6 +136,11 @@ function renderDashboard() {
           <div><div class="stat-label">Dépenses</div><div class="stat-value" style="color:#E8A490">${fmtEUR(totals.totalDep)}</div></div>
         </div>
       </div>
+      ${sparkSvg ? `
+      <div class="sparkline-wrap">
+        <span class="sparkline-label">6 derniers mois</span>
+        ${sparkSvg}
+      </div>` : ""}
     </div>
 
     <div class="grid-2">
@@ -135,7 +152,7 @@ function renderDashboard() {
           return `
           <div class="cat-row">
             <div class="cat-row-top">
-              <span class="name">${esc(r.cat)}</span>
+              <span class="name"><span class="cat-icon">${categoryIcon(r.cat)}</span>${esc(r.cat)}</span>
               <span class="amounts ${over ? "over" : ""}">${fmtEUR(r.reel)}${r.prevu > 0 ? ` <span style="color:var(--ink40)">/ ${fmtEUR(r.prevu)}</span>` : ""}</span>
             </div>
             <div class="bar-track">
@@ -150,14 +167,34 @@ function renderDashboard() {
         <h3 class="section-title">Répartition des dépenses</h3>
         ${pieData.length === 0 ? `<div class="empty">Rien à afficher pour ce mois.</div>` : `
         <div class="donut-wrap">
-          <div class="donut" style="background:conic-gradient(${gradient})"></div>
+          <div class="donut-pos">
+            <div class="donut" style="background:conic-gradient(${gradient})"></div>
+            <div class="donut-center"><div class="amt">${fmtEUR(total).replace(",00", "")}</div><div class="lbl">total</div></div>
+          </div>
           <div class="legend">
-            ${pieData.map(([name]) => `<span class="legend-item"><span class="legend-dot" style="background:${hashColor(name)}"></span>${esc(name)}</span>`).join("")}
+            ${pieData.map(([name]) => `<span class="legend-item"><span class="legend-dot" style="background:${hashColor(name)}"></span>${categoryIcon(name)} ${esc(name)}</span>`).join("")}
           </div>
         </div>`}
       </div>
     </div>
   `;
+}
+
+// Génère un mini graphique SVG (aire + ligne) pour visualiser une tendance sur quelques mois
+function renderSparkline(series, w = 130, h = 34) {
+  const vals = series.map((s) => s.reste);
+  const min = Math.min(...vals, 0), max = Math.max(...vals, 0);
+  const range = max - min || 1;
+  const step = w / (vals.length - 1);
+  const pts = vals.map((v, i) => [i * step, h - ((v - min) / range) * h]);
+  const line = pts.map((p) => p.join(",")).join(" ");
+  const area = `0,${h} ${line} ${w},${h}`;
+  const last = vals[vals.length - 1];
+  const color = last >= 0 ? "#9FD1B0" : "#E8A490";
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="overflow:visible;flex-shrink:0;">
+    <polygon points="${area}" fill="${color}" opacity="0.15" />
+    <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>`;
 }
 
 function renderTransactions() {
@@ -185,7 +222,7 @@ function renderTransactions() {
         ${mtx.length === 0 ? `<div class="empty">Aucune transaction ce mois-ci. Ajoute-en une pour commencer.</div>` : mtx.map((t) => `
           <div class="tx-row">
             <div class="tx-left">
-              <span class="tx-dot" style="background:${hashColor(t.categorie)}"></span>
+              <span class="tx-icon" style="background:${hashColor(t.categorie)}22;">${categoryIcon(t.categorie)}</span>
               <div style="min-width:0;">
                 <div class="tx-desc">${esc(t.description) || esc(t.categorie)}</div>
                 <div class="tx-meta"><span>${new Date(t.date).toLocaleDateString("fr-FR")}</span><span>${esc(t.categorie)}</span></div>
