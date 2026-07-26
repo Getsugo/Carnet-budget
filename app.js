@@ -5,7 +5,7 @@ const DEFAULT_CATS = {
   revenus: ["salaire", "caf", "maman", "cpam", "wtw", "mamy"],
 };
 const MOIS_FR = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
-const PALETTE = ["#3F6B58","#B98B29","#7A5C7E","#2E6E7E","#B8492F","#6B7F3F","#8C6239","#4A5C77","#9C5B45","#5C7A6B"];
+const PALETTE = ["#37D399","#F0BE4E","#A78BFA","#4FC3E8","#FB7A8A","#8FD14F","#E89A4D","#6C8FE8","#E8739E","#4FD1B5"];
 const CATEGORY_ICONS = {
   courses: "🛒", loisirs: "🎉", voiture: "🚗", gasoil: "⛽", salle: "🏋️", cadeaux: "🎁",
   groupama: "🛡️", resto: "🍽️", canal: "📺", maman: "❤️", autres: "💳", bricolage: "🔨",
@@ -100,6 +100,7 @@ function render() {
   void view.offsetWidth;
   view.classList.add("view-anim");
   attachViewHandlers();
+  animateCounts();
 }
 
 function renderDashboard() {
@@ -129,11 +130,11 @@ function renderDashboard() {
       <div class="hero-top">
         <div>
           <div class="hero-label">Reste à vivre — ${esc(monthLabel(state.month))}</div>
-          <div class="hero-amount font-mono" style="color:${totals.reste >= 0 ? "#9FD1B0" : "#E8A490"}">${fmtEUR(totals.reste)}</div>
+          <div class="hero-amount font-mono" style="color:${totals.reste >= 0 ? "#37D399" : "#FB7A8A"}"><span class="count-anim" data-count-target="${totals.reste}">${fmtEUR(totals.reste)}</span></div>
         </div>
         <div class="hero-stats">
-          <div><div class="stat-label">Revenus</div><div class="stat-value" style="color:#9FD1B0">${fmtEUR(totals.totalRev)}</div></div>
-          <div><div class="stat-label">Dépenses</div><div class="stat-value" style="color:#E8A490">${fmtEUR(totals.totalDep)}</div></div>
+          <div><div class="stat-label">Revenus</div><div class="stat-value" style="color:#37D399">${fmtEUR(totals.totalRev)}</div></div>
+          <div><div class="stat-label">Dépenses</div><div class="stat-value" style="color:#FB7A8A">${fmtEUR(totals.totalDep)}</div></div>
         </div>
       </div>
       ${sparkSvg ? `
@@ -190,11 +191,71 @@ function renderSparkline(series, w = 130, h = 34) {
   const line = pts.map((p) => p.join(",")).join(" ");
   const area = `0,${h} ${line} ${w},${h}`;
   const last = vals[vals.length - 1];
-  const color = last >= 0 ? "#9FD1B0" : "#E8A490";
+  const color = last >= 0 ? "#37D399" : "#FB7A8A";
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="overflow:visible;flex-shrink:0;">
     <polygon points="${area}" fill="${color}" opacity="0.15" />
     <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
   </svg>`;
+}
+
+// Courbe lissée avec dégradé pour l'évolution du "reste" mois par mois (onglet Année)
+function renderTrendChart(series) {
+  const SAGE = "#37D399", RUST = "#FB7A8A", LINE = "rgba(255,255,255,0.10)", INK40 = "rgba(243,245,248,0.35)";
+  const w = Math.max(320, series.length * 50);
+  const h = 170, padTop = 14, padBottom = 26;
+  const vals = series.map((s) => s.reste);
+  const min = Math.min(...vals, 0), max = Math.max(...vals, 0);
+  const range = max - min || 1;
+  const innerH = h - padTop - padBottom;
+  const stepX = series.length > 1 ? w / (series.length - 1) : 0;
+  const pts = vals.map((v, i) => [i * stepX, padTop + innerH - ((v - min) / range) * innerH]);
+  const zeroY = padTop + innerH - ((0 - min) / range) * innerH;
+
+  let path = `M ${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+    const mx = (x0 + x1) / 2;
+    path += ` C ${mx.toFixed(1)},${y0.toFixed(1)} ${mx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`;
+  }
+  const areaPath = `${path} L ${pts[pts.length - 1][0].toFixed(1)},${h - padBottom} L ${pts[0][0].toFixed(1)},${h - padBottom} Z`;
+  const dots = pts.map(([x, y], i) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${vals[i] >= 0 ? SAGE : RUST}" stroke="#fff" stroke-width="1.5" />`).join("");
+  const labels = series.map((s, i) => `<text x="${(i * stepX).toFixed(1)}" y="${h - 8}" font-size="10" fill="${INK40}" text-anchor="middle" font-family="ui-monospace,monospace">${esc(s.label)}</text>`).join("");
+
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;">
+    <defs>
+      <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${SAGE}" stop-opacity="0.28" />
+        <stop offset="100%" stop-color="${SAGE}" stop-opacity="0" />
+      </linearGradient>
+    </defs>
+    <line x1="0" y1="${zeroY.toFixed(1)}" x2="${w}" y2="${zeroY.toFixed(1)}" stroke="${LINE}" stroke-width="1" stroke-dasharray="3,3" />
+    <path d="${areaPath}" fill="url(#trendGrad)" />
+    <path d="${path}" fill="none" stroke="${SAGE}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+    ${dots}
+    ${labels}
+  </svg>`;
+}
+
+// Anime l'apparition des montants (compteur) et des barres de progression après un rendu
+function animateCounts() {
+  document.querySelectorAll(".count-anim").forEach((el) => {
+    const target = parseFloat(el.dataset.countTarget);
+    if (Number.isNaN(target)) return;
+    const t0 = performance.now();
+    const dur = 650;
+    function step(now) {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = fmtEUR(target * eased);
+      if (p < 1) requestAnimationFrame(step);
+      else el.textContent = fmtEUR(target);
+    }
+    requestAnimationFrame(step);
+  });
+  document.querySelectorAll("[data-goal-width]").forEach((el) => {
+    const w = parseFloat(el.dataset.goalWidth) || 0;
+    requestAnimationFrame(() => { el.style.width = `${w}%`; });
+  });
 }
 
 function renderTransactions() {
@@ -210,9 +271,9 @@ function renderTransactions() {
       </div>
     </div>
     ${dupCount > 0 ? `
-    <div class="hint" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--gold-light);color:#6b5219;padding:10px 12px;border-radius:12px;margin-bottom:12px;">
+    <div class="hint" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--gold-light);color:#F7DA9A;padding:10px 12px;border-radius:12px;margin-bottom:12px;">
       <span>⚠ ${dupCount} doublon(s) potentiel(s) détecté(s) dans tout l'historique (même date, montant et libellé).</span>
-      <button class="btn btn-outline" id="cleanDupBtn" style="background:#fff;flex-shrink:0;">Nettoyer</button>
+      <button class="btn btn-outline" id="cleanDupBtn" style="flex-shrink:0;">Nettoyer</button>
     </div>` : ""}
     <div id="importErrorBox"></div>
     <p class="hint">Import automatique reconnu : export <strong>Crédit Agricole</strong> (Date, Libellé, Débit euros, Crédit euros) — catégorisation auto, doublons ignorés automatiquement. Ou format générique : <span class="font-mono">date, montant, description, categorie, type</span>.</p>
@@ -220,7 +281,7 @@ function renderTransactions() {
       <div class="receipt-edge"></div>
       <div class="tx-list">
         ${mtx.length === 0 ? `<div class="empty">Aucune transaction ce mois-ci. Ajoute-en une pour commencer.</div>` : mtx.map((t) => `
-          <div class="tx-row">
+          <div class="tx-row" data-edit-id="${t.id}">
             <div class="tx-left">
               <span class="tx-icon" style="background:${hashColor(t.categorie)}22;">${categoryIcon(t.categorie)}</span>
               <div style="min-width:0;">
@@ -275,11 +336,11 @@ function renderAnnee() {
 
   let planHtml = "";
   if (manque <= 0) {
-    planHtml = `<div class="goal-plan" style="color:#9FD1B0;">🎉 Objectif atteint !</div>`;
+    planHtml = `<div class="goal-plan" style="color:#37D399;">🎉 Objectif atteint !</div>`;
   } else if (state.settings.dateObjectif) {
     if (moisRestants === null) { /* no date */ }
     else if (moisRestants <= 0) {
-      planHtml = `<div class="goal-plan" style="color:#E8A490;">La date objectif est déjà passée — ajuste-la dans les réglages.</div>`;
+      planHtml = `<div class="goal-plan" style="color:#FB7A8A;">La date objectif est déjà passée — ajuste-la dans les réglages.</div>`;
     } else {
       const parMois = manque / moisRestants;
       planHtml = `<div class="goal-plan">Il te reste <b>${fmtEUR(manque)}</b> à épargner d'ici <span style="text-transform:capitalize;">${esc(monthLabel(state.settings.dateObjectif))}</span> (${moisRestants} mois) → soit environ <b>${fmtEUR(parMois)}</b> / mois.</div>`;
@@ -294,7 +355,8 @@ function renderAnnee() {
         <div class="yearly-bars">
           ${series.map((s) => `
             <div class="yearly-bar-col">
-              <div class="yearly-bar ${s.reste < 0 ? "neg" : ""}" style="height:${Math.max(2, (Math.abs(s.reste) / maxAbs) * 150)}px"></div>
+              <div class="yearly-bar-value font-mono">${s.reste >= 0 ? "+" : ""}${Math.round(s.reste)}€</div>
+              <div class="yearly-bar ${s.reste < 0 ? "neg" : ""}" style="height:${Math.max(3, (Math.abs(s.reste) / maxAbs) * 130)}px"></div>
               <div class="yearly-bar-label">${esc(s.label)}</div>
             </div>
           `).join("")}
@@ -305,10 +367,10 @@ function renderAnnee() {
     <div class="card dark card-pad" style="margin-top:20px;">
       <div class="hero-label">🎯 Objectif d'épargne — patrimoine total</div>
       <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:8px;margin:6px 0;">
-        <div class="hero-amount font-mono" style="font-size:30px;">${fmtEUR(patrimoine)}</div>
+        <div class="hero-amount font-mono" style="font-size:30px;"><span class="count-anim" data-count-target="${patrimoine}">${fmtEUR(patrimoine)}</span></div>
         <div class="font-mono" style="font-size:13px;opacity:0.7;">sur ${fmtEUR(state.settings.objectif)}</div>
       </div>
-      <div class="goal-progress"><div class="goal-fill" style="width:${pct}%"></div></div>
+      <div class="goal-progress"><div class="goal-fill" style="width:0%" data-goal-width="${pct}"></div></div>
       <div class="goal-pct">${pct.toFixed(1)}%</div>
       ${planHtml}
     </div>
@@ -366,10 +428,16 @@ function renderAnnee() {
 /* ---------- Handlers de vue ---------- */
 function attachViewHandlers() {
   document.querySelectorAll("[data-del]").forEach((btn) => {
-    btn.onclick = () => { state.tx = state.tx.filter((t) => t.id !== btn.dataset.del); persist("tx"); render(); };
+    btn.onclick = (e) => { e.stopPropagation(); state.tx = state.tx.filter((t) => t.id !== btn.dataset.del); persist("tx"); render(); };
+  });
+  document.querySelectorAll("[data-edit-id]").forEach((row) => {
+    row.onclick = () => {
+      const t = state.tx.find((x) => x.id === row.dataset.editId);
+      if (t) openTxModal(t);
+    };
   });
   const addBtnInline = document.getElementById("addBtnInline");
-  if (addBtnInline) addBtnInline.onclick = openAddModal;
+  if (addBtnInline) addBtnInline.onclick = () => openTxModal(null);
 
   const cleanDupBtn = document.getElementById("cleanDupBtn");
   if (cleanDupBtn) cleanDupBtn.onclick = () => {
@@ -652,37 +720,46 @@ function handleImport(file) {
   reader.readAsText(file, "ISO-8859-1");
 }
 
-/* ---------- Modal d'ajout ---------- */
-function openAddModal() {
+/* ---------- Modal d'ajout / édition ---------- */
+function openTxModal(existing) {
+  const isEdit = !!existing;
   const root = document.getElementById("modalRoot");
-  let type = "depense";
+  let type = existing ? existing.type : "depense";
   const todayISO = new Date().toISOString().slice(0, 10);
 
   function optionsFor(t) { return (t === "depense" ? state.cats.depenses : state.cats.revenus); }
 
   function paint() {
+    const currentCat = existing ? existing.categorie : "";
+    const catList = optionsFor(type);
+    const catInList = currentCat && catList.includes(currentCat);
     root.innerHTML = `
       <div class="modal-backdrop" id="backdrop">
         <form class="modal" id="addForm">
           <div class="modal-head">
-            <h3>Nouvelle transaction</h3>
+            <h3>${isEdit ? "Modifier la transaction" : "Nouvelle transaction"}</h3>
             <button type="button" id="closeModal">✕</button>
           </div>
           <div class="type-switch">
             <button type="button" data-type="depense" class="${type === "depense" ? "active-dep" : ""}">Dépense</button>
             <button type="button" data-type="revenu" class="${type === "revenu" ? "active-rev" : ""}">Revenu</button>
           </div>
-          <div class="field"><label>Montant (€)</label><input type="number" step="0.01" min="0" required id="fMontant" placeholder="0,00" /></div>
-          <div class="field"><label>Date</label><input type="date" id="fDate" value="${todayISO}" /></div>
-          <div class="field"><label>Description (optionnel)</label><input type="text" id="fDesc" placeholder="ex : courses Leclerc" /></div>
+          <div class="field"><label>Montant (€)</label><input type="number" step="0.01" min="0" required id="fMontant" placeholder="0,00" value="${existing ? existing.montant : ""}" /></div>
+          <div class="field"><label>Date</label><input type="date" id="fDate" value="${existing ? existing.date : todayISO}" /></div>
+          <div class="field"><label>Description (optionnel)</label><input type="text" id="fDesc" placeholder="ex : courses Leclerc" value="${existing ? esc(existing.description || "") : ""}" /></div>
           <div class="field">
             <label>Catégorie</label>
             <div class="cat-row-input">
-              <select id="fCat">${optionsFor(type).map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
+              ${catInList || !currentCat ? `
+              <select id="fCat">${catList.map((c) => `<option value="${esc(c)}" ${c === currentCat ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
               <button type="button" class="link-btn" id="newCatBtn">Nouvelle</button>
+              ` : `
+              <input type="text" id="fCat" value="${esc(currentCat)}" />
+              `}
             </div>
           </div>
-          <button type="submit" class="submit-btn">Enregistrer</button>
+          <button type="submit" class="submit-btn">${isEdit ? "Enregistrer les modifications" : "Enregistrer"}</button>
+          ${isEdit ? `<button type="button" class="link-btn" id="deleteTxBtn" style="width:100%;margin-top:10px;text-align:center;color:var(--rust);border-color:var(--rust-light);padding:10px;">Supprimer cette transaction</button>` : ""}
         </form>
       </div>
     `;
@@ -691,9 +768,17 @@ function openAddModal() {
     document.querySelectorAll(".type-switch button").forEach((b) => {
       b.onclick = () => { type = b.dataset.type; paint(); };
     });
-    document.getElementById("newCatBtn").onclick = () => {
+    const newCatBtn = document.getElementById("newCatBtn");
+    if (newCatBtn) newCatBtn.onclick = () => {
       const wrap = document.querySelector(".cat-row-input");
       wrap.innerHTML = `<input type="text" id="fCat" placeholder="nom de la catégorie" autofocus />`;
+    };
+    const deleteTxBtn = document.getElementById("deleteTxBtn");
+    if (deleteTxBtn) deleteTxBtn.onclick = () => {
+      state.tx = state.tx.filter((t) => t.id !== existing.id);
+      persist("tx");
+      root.innerHTML = "";
+      render();
     };
     document.getElementById("addForm").onsubmit = (e) => {
       e.preventDefault();
@@ -702,9 +787,15 @@ function openAddModal() {
       const date = document.getElementById("fDate").value || todayISO;
       const description = document.getElementById("fDesc").value;
       const categorie = (document.getElementById("fCat").value || "autres").toLowerCase().trim();
-      state.tx.push({ id: uid(), type, date, montant, description, categorie });
       const key = type === "depense" ? "depenses" : "revenus";
       if (!state.cats[key].includes(categorie)) state.cats[key].push(categorie);
+
+      if (isEdit) {
+        const t = state.tx.find((x) => x.id === existing.id);
+        if (t) { t.type = type; t.date = date; t.montant = montant; t.description = description; t.categorie = categorie; }
+      } else {
+        state.tx.push({ id: uid(), type, date, montant, description, categorie });
+      }
       persist();
       root.innerHTML = "";
       state.month = monthKey(date);
@@ -731,7 +822,7 @@ function init() {
   document.getElementById("prevMonth").onclick = () => shiftMonth(-1);
   document.getElementById("nextMonth").onclick = () => shiftMonth(1);
   document.querySelectorAll("#tabs button").forEach((b) => { b.onclick = () => { state.tab = b.dataset.tab; render(); }; });
-  document.getElementById("fabAdd").onclick = openAddModal;
+  document.getElementById("fabAdd").onclick = () => openTxModal(null);
 
   render();
 
