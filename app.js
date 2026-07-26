@@ -1,27 +1,41 @@
 /* ---------- Constantes ---------- */
-const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets" };
+// Clés utilisées pour sauvegarder chaque partie des données dans le stockage du téléphone (localStorage)
+const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons" };
+// Catégories fournies par défaut au tout premier lancement de l'appli (l'utilisateur peut les modifier/supprimer ensuite)
 const DEFAULT_CATS = {
   depenses: ["courses", "loisirs", "voiture", "gasoil", "salle", "cadeaux", "groupama", "resto", "canal", "maman", "autres"],
   revenus: ["salaire", "caf", "maman", "cpam", "wtw", "mamy"],
 };
 const MOIS_FR = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+// Couleurs utilisées pour colorer automatiquement les catégories (choisies au hasard selon le nom, voir hashColor)
 const PALETTE = ["#37D399","#F0BE4E","#A78BFA","#4FC3E8","#FB7A8A","#8FD14F","#E89A4D","#6C8FE8","#E8739E","#4FD1B5"];
+// Emoji par défaut pour chaque catégorie connue. L'utilisateur peut les remplacer (voir state.catIcons ci-dessous).
 const CATEGORY_ICONS = {
   courses: "🛒", loisirs: "🎉", voiture: "🚗", gasoil: "⛽", salle: "🏋️", cadeaux: "🎁",
   groupama: "🛡️", resto: "🍽️", canal: "📺", maman: "❤️", autres: "💳", bricolage: "🔨",
   internet: "📶", salaire: "💼", caf: "👶", cpam: "🏥", wtw: "📄", mamy: "❤️",
 };
-function categoryIcon(cat) { return CATEGORY_ICONS[(cat || "").toLowerCase()] || "💳"; }
+// Renvoie l'icône à afficher pour une catégorie donnée :
+// 1) l'icône personnalisée choisie par l'utilisateur si elle existe (state.catIcons)
+// 2) sinon l'icône par défaut (CATEGORY_ICONS)
+// 3) sinon une icône générique de secours (💳)
+function categoryIcon(cat) {
+  const key = (cat || "").toLowerCase();
+  return (state.catIcons && state.catIcons[key]) || CATEGORY_ICONS[key] || "💳";
+}
 
 /* ---------- Etat ---------- */
+// "state" contient TOUTES les données de l'appli en mémoire pendant qu'elle tourne.
+// À chaque modification importante, on appelle persist() pour l'écrire dans le stockage du téléphone.
 let state = {
-  tx: [],
-  budgets: {},
-  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "" },
-  cats: JSON.parse(JSON.stringify(DEFAULT_CATS)),
+  tx: [], // liste de toutes les transactions : {id, type: "depense"|"revenu", date, montant, description, categorie}
+  budgets: {}, // budget prévu par mois : { "2026-07": { depenses: {courses: 250, ...}, revenus: {...} } }
+  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "" }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible)
+  cats: JSON.parse(JSON.stringify(DEFAULT_CATS)), // liste des catégories existantes (copie pour ne pas modifier DEFAULT_CATS par erreur)
+  catIcons: {}, // surcharge des icônes par catégorie choisie par l'utilisateur : { "courses": "🥖" }
   assets: [], // comptes/livrets/investissements saisis manuellement : {id, nom, montant}
-  month: new Date().toISOString().slice(0, 7),
-  tab: "dashboard",
+  month: new Date().toISOString().slice(0, 7), // mois actuellement affiché, format "AAAA-MM"
+  tab: "dashboard", // onglet actuellement affiché
 };
 
 /* ---------- Utils ---------- */
@@ -33,26 +47,37 @@ const hashColor = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = s.c
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ---------- Stockage local ---------- */
+// Recharge toutes les données sauvegardées depuis le stockage du téléphone au démarrage de l'appli.
+// Chaque bloc try/catch est indépendant : si une donnée est corrompue, les autres se chargent quand même.
 function loadState() {
   try { const v = localStorage.getItem(LS_KEYS.tx); if (v) state.tx = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.budgets); if (v) state.budgets = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.settings); if (v) state.settings = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.cats); if (v) state.cats = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.assets); if (v) state.assets = JSON.parse(v); } catch (e) {}
-  if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = "";
+  try { const v = localStorage.getItem(LS_KEYS.catIcons); if (v) state.catIcons = JSON.parse(v); } catch (e) {}
+  if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = ""; // rétrocompatibilité si le réglage n'existait pas encore
+  // Au démarrage, on se place automatiquement sur le mois de la transaction la plus récente (plutôt que le mois calendaire actuel)
   if (state.tx.length) { const months = state.tx.map((t) => monthKey(t.date)).sort(); state.month = months[months.length - 1]; }
 }
+// Sauvegarde l'état dans le stockage du téléphone.
+// "part" permet de ne sauvegarder qu'un seul morceau (ex: persist("tx") après avoir modifié une transaction),
+// ou tout sauvegarder d'un coup si "part" n'est pas précisé.
 function persist(part) {
   if (part === "tx" || !part) localStorage.setItem(LS_KEYS.tx, JSON.stringify(state.tx));
   if (part === "budgets" || !part) localStorage.setItem(LS_KEYS.budgets, JSON.stringify(state.budgets));
   if (part === "settings" || !part) localStorage.setItem(LS_KEYS.settings, JSON.stringify(state.settings));
   if (part === "cats" || !part) localStorage.setItem(LS_KEYS.cats, JSON.stringify(state.cats));
   if (part === "assets" || !part) localStorage.setItem(LS_KEYS.assets, JSON.stringify(state.assets));
+  if (part === "catIcons" || !part) localStorage.setItem(LS_KEYS.catIcons, JSON.stringify(state.catIcons));
 }
 
 /* ---------- Dérivées ---------- */
+// Renvoie uniquement les transactions du mois actuellement affiché (state.month, format "AAAA-MM")
 function getMonthTx() { return state.tx.filter((t) => monthKey(t.date) === state.month); }
+// Renvoie le budget prévu (dépenses/revenus par catégorie) saisi pour le mois affiché, ou un objet vide si rien n'a encore été saisi
 function getMonthBudget() { return state.budgets[state.month] || { depenses: {}, revenus: {} }; }
+// Calcule les totaux réels du mois : somme par catégorie (depReel/revReel), totaux généraux, et ce qu'il "reste" (revenus - dépenses)
 function getTotals() {
   const mtx = getMonthTx();
   const depReel = {}, revReel = {};
@@ -61,6 +86,7 @@ function getTotals() {
   const totalRev = Object.values(revReel).reduce((a, b) => a + b, 0);
   return { depReel, revReel, totalDep, totalRev, reste: totalRev - totalDep };
 }
+// Regroupe TOUTES les transactions (tous mois confondus) pour construire la série utilisée par le graphique "Reste par mois" (onglet Année)
 function getYearlySeries() {
   const map = {};
   state.tx.forEach((t) => {
@@ -68,12 +94,15 @@ function getYearlySeries() {
     map[mk] = map[mk] || { revenus: 0, depenses: 0 };
     if (t.type === "revenu") map[mk].revenus += t.montant; else map[mk].depenses += t.montant;
   });
+  // Trie les mois dans l'ordre chronologique (les clés "AAAA-MM" se trient bien en texte) et calcule le "reste" de chaque mois
   return Object.keys(map).sort().map((mk) => ({ mois: mk, label: monthLabel(mk).slice(0, 3), reste: map[mk].revenus - map[mk].depenses }));
 }
+// Solde du compte courant = solde de départ réglé dans les paramètres + somme de toutes les transactions jamais enregistrées (tous mois)
 function getCompteActuel() {
   const cumul = state.tx.reduce((acc, t) => acc + (t.type === "revenu" ? t.montant : -t.montant), 0);
   return state.settings.soldeInitial + cumul;
 }
+// Patrimoine total = compte courant (calculé automatiquement) + somme des comptes ajoutés à la main (Livret A, assurance-vie, etc.)
 function getPatrimoineTotal() {
   const autres = state.assets.reduce((acc, a) => acc + (Number(a.montant) || 0), 0);
   return getCompteActuel() + autres;
@@ -88,6 +117,9 @@ function getMoisRestants() {
 }
 
 /* ---------- Rendu ---------- */
+// Fonction centrale appelée après CHAQUE changement de données ou d'onglet : elle redessine tout l'écran actif.
+// Le contenu de #view est entièrement régénéré (innerHTML) puis les écouteurs de clic sont ré-attachés (attachViewHandlers),
+// car le DOM ayant été recréé, les anciens écouteurs ne pointent plus vers rien.
 function render() {
   document.getElementById("monthLabel").textContent = monthLabel(state.month);
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.tab));
@@ -96,6 +128,8 @@ function render() {
   else if (state.tab === "transactions") view.innerHTML = renderTransactions();
   else if (state.tab === "budget") view.innerHTML = renderBudget();
   else if (state.tab === "annee") view.innerHTML = renderAnnee();
+  // Astuce pour rejouer l'animation d'apparition à chaque changement d'onglet :
+  // on retire la classe, on force le navigateur à "lire" le DOM (offsetWidth), puis on la remet.
   view.classList.remove("view-anim");
   void view.offsetWidth;
   view.classList.add("view-anim");
@@ -103,9 +137,12 @@ function render() {
   animateCounts();
 }
 
+// Construit l'onglet "Tableau de bord" : le bandeau "reste à vivre" en haut, la comparaison prévu/réel par catégorie,
+// et le donut de répartition des dépenses.
 function renderDashboard() {
   const totals = getTotals();
   const mb = getMonthBudget();
+  // On combine les catégories qui ont un budget prévu ET celles qui ont des dépenses réelles (même sans budget prévu)
   const allCats = new Set([...Object.keys(mb.depenses || {}), ...Object.keys(totals.depReel)]);
   const rows = [...allCats].map((cat) => {
     const prevu = (mb.depenses || {})[cat] || 0;
@@ -113,6 +150,8 @@ function renderDashboard() {
     return { cat, prevu, reel };
   }).sort((a, b) => b.reel - a.reel);
 
+  // Construit le donut de répartition avec un dégradé conique CSS : chaque catégorie occupe une portion
+  // du cercle proportionnelle à son montant, en cumulant les angles de départ/fin (acc = angle cumulé)
   const pieData = Object.entries(totals.depReel);
   let gradient = "", acc = 0;
   const total = pieData.reduce((s, [, v]) => s + v, 0) || 1;
@@ -122,6 +161,7 @@ function renderDashboard() {
   });
   gradient = gradient ? gradient.slice(0, -2) : "var(--paper-dim) 0deg 360deg";
 
+  // Petite courbe (sparkline) des 6 derniers mois affichée dans le bandeau du haut
   const spark = getYearlySeries().slice(-6);
   const sparkSvg = spark.length >= 2 ? renderSparkline(spark) : "";
 
@@ -258,6 +298,8 @@ function animateCounts() {
   });
 }
 
+// Construit l'onglet "Transactions" : liste du mois affiché, bouton import CSV, détection de doublons,
+// et chaque ligne (data-edit-id) est cliquable pour ouvrir la fiche d'édition (voir attachViewHandlers)
 function renderTransactions() {
   const mtx = getMonthTx().slice().sort((a, b) => b.date.localeCompare(a.date));
   const dupCount = countDuplicates();
@@ -301,15 +343,30 @@ function renderTransactions() {
   `;
 }
 
+// Supprime une catégorie de la liste (type = "depenses" ou "revenus").
+// Les transactions déjà enregistrées avec cette catégorie ne sont PAS supprimées ni modifiées :
+// elles garderont juste l'ancien nom de catégorie (elle n'apparaîtra plus dans le formulaire pour les nouvelles transactions).
+// On retire aussi son montant prévu de tous les mois du budget, pour ne pas laisser de ligne fantôme.
+function removeCategory(type, cat) {
+  state.cats[type] = state.cats[type].filter((c) => c !== cat);
+  Object.keys(state.budgets).forEach((mk) => { if (state.budgets[mk]?.[type]) delete state.budgets[mk][type][cat]; });
+  persist("cats"); persist("budgets");
+}
+
+// Construit l'onglet "Budget prévu" : deux colonnes (dépenses/revenus) où on saisit le montant prévu par catégorie,
+// avec pour chaque catégorie une icône cliquable (changer l'emoji) et un bouton ✕ (supprimer la catégorie)
 function renderBudget() {
   const mb = getMonthBudget();
+  // Construit une colonne de catégories (dépenses ou revenus) : icône cliquable + nom + champ montant prévu + bouton supprimer
   const col = (type, list) => list.map((cat) => `
     <div class="budget-row">
+      <span class="cat-icon-btn" data-icon-edit="${type}|${esc(cat)}" title="Changer l'icône">${categoryIcon(cat)}</span>
       <span class="name">${esc(cat)}</span>
       <div class="budget-input-wrap">
         <input type="number" step="0.01" placeholder="0" data-prevu="${type}|${esc(cat)}" value="${(mb[type] || {})[cat] ?? ""}" />
         <span style="color:var(--ink40)">€</span>
       </div>
+      <button type="button" class="cat-del-btn" data-cat-del="${type}|${esc(cat)}" title="Supprimer cette catégorie">✕</button>
     </div>`).join("");
   return `
     <div class="grid-2" style="margin-top:0;">
@@ -322,9 +379,12 @@ function renderBudget() {
         ${col("revenus", state.cats.revenus)}
       </div>
     </div>
+    <p class="hint" style="margin-top:14px;">Astuce : tape sur l'icône d'une catégorie pour la changer, ou sur ✕ pour la supprimer (les transactions déjà enregistrées avec cette catégorie ne sont pas touchées).</p>
   `;
 }
 
+// Construit l'onglet "Année & objectif" : barres vert/rouge du reste par mois, objectif d'épargne (patrimoine total),
+// liste des comptes ajoutés manuellement (Livret A, etc.) et réglages (objectif, date, solde de départ)
 function renderAnnee() {
   const series = getYearlySeries();
   const compteActuel = getCompteActuel();
@@ -427,13 +487,37 @@ function renderAnnee() {
 
 /* ---------- Handlers de vue ---------- */
 function attachViewHandlers() {
+  // Supprimer une transaction (bouton ✕ sur une ligne) — stopPropagation pour ne pas déclencher l'ouverture de la fiche d'édition
   document.querySelectorAll("[data-del]").forEach((btn) => {
     btn.onclick = (e) => { e.stopPropagation(); state.tx = state.tx.filter((t) => t.id !== btn.dataset.del); persist("tx"); render(); };
   });
+  // Ouvrir la fiche d'édition en tapant n'importe où sur une ligne de transaction
   document.querySelectorAll("[data-edit-id]").forEach((row) => {
     row.onclick = () => {
       const t = state.tx.find((x) => x.id === row.dataset.editId);
       if (t) openTxModal(t);
+    };
+  });
+  // Supprimer une catégorie (bouton ✕ à côté d'une catégorie dans l'onglet Budget prévu)
+  document.querySelectorAll("[data-cat-del]").forEach((btn) => {
+    btn.onclick = () => {
+      const [type, cat] = btn.dataset.catDel.split("|");
+      if (confirm(`Supprimer la catégorie "${cat}" ? (les transactions déjà enregistrées avec cette catégorie ne seront pas modifiées)`)) {
+        removeCategory(type, cat);
+        render();
+      }
+    };
+  });
+  // Changer l'icône d'une catégorie (clic sur l'emoji dans l'onglet Budget prévu)
+  document.querySelectorAll("[data-icon-edit]").forEach((btn) => {
+    btn.onclick = () => {
+      const [, cat] = btn.dataset.iconEdit.split("|");
+      const nouvelle = prompt(`Nouvel emoji pour "${cat}" (copie-colle un emoji, ex : 🥖)`, categoryIcon(cat));
+      if (nouvelle && nouvelle.trim()) {
+        state.catIcons[cat.toLowerCase()] = nouvelle.trim();
+        persist("catIcons");
+        render();
+      }
     };
   });
   const addBtnInline = document.getElementById("addBtnInline");
@@ -519,6 +603,8 @@ function tokenizeCSV(text, delim) {
   if (cell.length > 0 || row.length > 0) { row.push(cell); rows.push(row); }
   return rows;
 }
+// Devine si le CSV utilise "," ou ";" comme séparateur, en comptant les occurrences de chaque sur un échantillon du fichier
+// (les exports bancaires français utilisent presque toujours ";" à cause de la virgule décimale)
 function detectDelim(text) {
   const sample = text.slice(0, 3000);
   const semi = (sample.match(/;/g) || []).length;
@@ -526,6 +612,8 @@ function detectDelim(text) {
   return semi >= comma ? ";" : ",";
 }
 
+// Convertit une date en format ISO "AAAA-MM-JJ" (celui utilisé partout dans l'appli), à partir soit d'une date déjà ISO,
+// soit d'une date française "JJ/MM/AAAA" (format des exports bancaires). Si le format est inconnu, renvoie la date du jour.
 function toISODate(str) {
   if (!str) return new Date().toISOString().slice(0, 10);
   str = str.trim();
@@ -535,6 +623,9 @@ function toISODate(str) {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Règles de catégorisation automatique à l'import CSV : chaque ligne associe une expression régulière (mots-clés
+// repérés dans le libellé de la transaction, insensible à la casse grâce au "i") à une catégorie de dépense.
+// La première règle qui correspond gagne — c'est pour ça que l'ordre peut avoir une petite importance.
 const CATEGORY_RULES_DEP = [
   [/leclerc|carrefour|\bcrf\b|monoprix|lidl|franprix|super\s?u|intermarch|casino|auchan/i, "courses"],
   [/uber\s?\*?eats|deliveroo|just\s?eat|restaurant|brasserie|bistro/i, "resto"],
@@ -547,10 +638,13 @@ const CATEGORY_RULES_DEP = [
   [/brico\s?depot|brico\s?d[ée]p[oô]t|castorama|leroy\s?merlin/i, "bricolage"],
   [/orange|\bfree\b|\bsfr\b|bouygues telecom|box\s?internet/i, "internet"],
 ];
+// Même principe que CATEGORY_RULES_DEP mais pour les revenus (crédits)
 const CATEGORY_RULES_REV = [
   [/salaire|\bpaie\b|virement.*salaire/i, "salaire"],
   [/\bcaf\b/i, "caf"],
 ];
+// Applique les règles ci-dessus au texte du libellé ; si aucune règle ne matche, la catégorie par défaut est "autres"
+// (l'utilisateur peut ensuite la corriger manuellement en tapant sur la transaction — voir openTxModal)
 function guessCategory(text, type) {
   const rules = type === "depense" ? CATEGORY_RULES_DEP : CATEGORY_RULES_REV;
   for (const [re, cat] of rules) if (re.test(text)) return cat;
@@ -583,15 +677,19 @@ function cleanLibelle(libRaw) {
   return body || first;
 }
 
+// Construit une "empreinte" unique pour une transaction (date + montant + type + description).
+// Deux transactions avec la même empreinte sont considérées comme des doublons (typiquement : ré-import du même CSV).
 function txKey(t) {
   return `${t.date}|${Number(t.montant).toFixed(2)}|${t.type}|${String(t.description || "").toLowerCase().trim()}`;
 }
+// Compte le nombre de transactions en double dans tout l'historique (utilisé pour afficher le bandeau d'alerte)
 function countDuplicates() {
   const seen = new Set();
   let count = 0;
   state.tx.forEach((t) => { const k = txKey(t); if (seen.has(k)) count++; else seen.add(k); });
   return count;
 }
+// Supprime les transactions en double (garde la première occurrence de chaque empreinte), appelé par le bouton "Nettoyer"
 function removeDuplicates() {
   const seen = new Set();
   const before = state.tx.length;
@@ -605,6 +703,11 @@ function removeDuplicates() {
   return before - state.tx.length;
 }
 
+// Lit un fichier CSV importé par l'utilisateur et l'ajoute aux transactions.
+// Deux formats sont reconnus automatiquement :
+// 1) Export Crédit Agricole : préambule + tableau avec colonnes Date/Libellé/Débit euros/Crédit euros
+// 2) Format générique : colonnes date, montant, description, categorie, type
+// Dans les deux cas : catégorisation automatique (format CA), déduplication, et fusion avec les catégories existantes.
 function handleImport(file) {
   const box = document.getElementById("importErrorBox");
   box.innerHTML = "";
@@ -727,8 +830,11 @@ function openTxModal(existing) {
   let type = existing ? existing.type : "depense";
   const todayISO = new Date().toISOString().slice(0, 10);
 
+  // Renvoie la liste des catégories disponibles selon le type sélectionné (dépense ou revenu)
   function optionsFor(t) { return (t === "depense" ? state.cats.depenses : state.cats.revenus); }
 
+  // (Re)dessine tout le contenu de la fenêtre modale — appelée à l'ouverture, et à chaque fois qu'on change
+  // le type (dépense/revenu) puisque la liste des catégories proposées change
   function paint() {
     const currentCat = existing ? existing.categorie : "";
     const catList = optionsFor(type);
