@@ -162,17 +162,23 @@ function renderDashboard() {
 
 function renderTransactions() {
   const mtx = getMonthTx().slice().sort((a, b) => b.date.localeCompare(a.date));
+  const dupCount = countDuplicates();
   return `
     <div class="tx-toolbar">
       <h2 class="section-title" style="margin:0;">Transactions du mois</h2>
-      <div style="display:flex;gap:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <input type="file" id="csvInput" accept=".csv,.txt" style="display:none;" />
         <button class="btn btn-outline" id="importBtn">⇧ Importer un CSV</button>
         <button class="btn btn-solid" id="addBtnInline">+ Ajouter</button>
       </div>
     </div>
+    ${dupCount > 0 ? `
+    <div class="hint" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--gold-light);color:#6b5219;padding:10px 12px;border-radius:12px;margin-bottom:12px;">
+      <span>⚠ ${dupCount} doublon(s) potentiel(s) détecté(s) dans tout l'historique (même date, montant et libellé).</span>
+      <button class="btn btn-outline" id="cleanDupBtn" style="background:#fff;flex-shrink:0;">Nettoyer</button>
+    </div>` : ""}
     <div id="importErrorBox"></div>
-    <p class="hint">Import automatique reconnu : export <strong>Crédit Agricole</strong> (Date, Libellé, Débit euros, Crédit euros) — catégorisation auto. Ou format générique : <span class="font-mono">date, montant, description, categorie, type</span>.</p>
+    <p class="hint">Import automatique reconnu : export <strong>Crédit Agricole</strong> (Date, Libellé, Débit euros, Crédit euros) — catégorisation auto, doublons ignorés automatiquement. Ou format générique : <span class="font-mono">date, montant, description, categorie, type</span>.</p>
     <div class="card">
       <div class="receipt-edge"></div>
       <div class="tx-list">
@@ -328,6 +334,14 @@ function attachViewHandlers() {
   const addBtnInline = document.getElementById("addBtnInline");
   if (addBtnInline) addBtnInline.onclick = openAddModal;
 
+  const cleanDupBtn = document.getElementById("cleanDupBtn");
+  if (cleanDupBtn) cleanDupBtn.onclick = () => {
+    const n = removeDuplicates();
+    render();
+    const box = document.getElementById("importErrorBox");
+    if (box) box.innerHTML = `<div class="hint" style="color:var(--sage);margin-bottom:12px;">✓ ${n} doublon(s) supprimé(s).</div>`;
+  };
+
   const importBtn = document.getElementById("importBtn");
   const csvInput = document.getElementById("csvInput");
   if (importBtn && csvInput) {
@@ -464,6 +478,28 @@ function cleanLibelle(libRaw) {
   return body || first;
 }
 
+function txKey(t) {
+  return `${t.date}|${Number(t.montant).toFixed(2)}|${t.type}|${String(t.description || "").toLowerCase().trim()}`;
+}
+function countDuplicates() {
+  const seen = new Set();
+  let count = 0;
+  state.tx.forEach((t) => { const k = txKey(t); if (seen.has(k)) count++; else seen.add(k); });
+  return count;
+}
+function removeDuplicates() {
+  const seen = new Set();
+  const before = state.tx.length;
+  state.tx = state.tx.filter((t) => {
+    const k = txKey(t);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  persist("tx");
+  return before - state.tx.length;
+}
+
 function handleImport(file) {
   const box = document.getElementById("importErrorBox");
   box.innerHTML = "";
@@ -493,7 +529,9 @@ function handleImport(file) {
       }
 
       let parsed = [];
+      let isCAFormat = false;
       if (headerIdx !== -1 && (debKey !== -1 || credKey !== -1)) {
+        isCAFormat = true;
         const dataRows = rows.slice(headerIdx + 1).filter((r) => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test((r[dateKey] || "").trim()));
         parsed = dataRows.map((r) => {
           const debitRaw = (r[debKey] || "").replace(/[€\s]/g, "").replace(",", ".");
@@ -512,8 +550,7 @@ function handleImport(file) {
             categorie: guessCategory(flat, type),
             type,
           };
-        }).filter((r) => r.montant > 0);
-        box.innerHTML = `<div class="hint" style="color:var(--sage);margin-bottom:12px;">✓ Format Crédit Agricole détecté — ${parsed.length} opération(s) importée(s) avec catégorisation automatique. Vérifie et corrige les catégories si besoin.</div>`;
+        }).filter((r) => r.montant > 0 && !/taux\s*[\d,.]+\s*%/i.test(r.description) && !/d[ée]compte/i.test(r.description));
       } else {
         const headers = rows[0].map((h) => h.toLowerCase().trim());
         const required = ["date", "montant", "categorie", "type"];
@@ -535,8 +572,23 @@ function handleImport(file) {
         }).filter((r) => r.montant > 0);
       }
 
+      // Ignore les transactions déjà présentes (même date, montant, type, libellé) — évite les doublons si le même fichier/période est réimporté
+      const existingKeys = new Set(state.tx.map(txKey));
+      const seenInBatch = new Set();
+      const deduped = [];
+      let skipped = 0;
+      parsed.forEach((t) => {
+        const k = txKey(t);
+        if (existingKeys.has(k) || seenInBatch.has(k)) { skipped++; return; }
+        seenInBatch.add(k);
+        deduped.push(t);
+      });
+      parsed = deduped;
+
       if (parsed.length === 0) {
-        box.innerHTML = `<div class="err-box">⚠ Aucune opération valide trouvée dans le fichier.</div>`;
+        box.innerHTML = skipped > 0
+          ? `<div class="hint" style="margin-bottom:12px;">Toutes les opérations de ce fichier étaient déjà importées (${skipped} doublon(s) ignoré(s)).</div>`
+          : `<div class="err-box">⚠ Aucune opération valide trouvée dans le fichier.</div>`;
         return;
       }
 
@@ -548,6 +600,14 @@ function handleImport(file) {
       const months = parsed.map((t) => monthKey(t.date)).sort();
       state.month = months[months.length - 1];
       render();
+
+      const skipNote = skipped > 0 ? ` (${skipped} doublon(s) ignoré(s))` : "";
+      const importBoxAfter = document.getElementById("importErrorBox");
+      if (importBoxAfter) {
+        importBoxAfter.innerHTML = isCAFormat
+          ? `<div class="hint" style="color:var(--sage);margin-bottom:12px;">✓ Format Crédit Agricole détecté — ${parsed.length} opération(s) importée(s) avec catégorisation automatique${skipNote}. Vérifie et corrige les catégories si besoin.</div>`
+          : `<div class="hint" style="color:var(--sage);margin-bottom:12px;">✓ ${parsed.length} opération(s) importée(s)${skipNote}.</div>`;
+      }
     } catch (e) {
       box.innerHTML = `<div class="err-box">⚠ Le fichier n'a pas pu être lu (${esc(e.message || "erreur inconnue")}).</div>`;
     }
