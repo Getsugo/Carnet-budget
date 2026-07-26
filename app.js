@@ -1,6 +1,6 @@
 /* ---------- Constantes ---------- */
 // Clés utilisées pour sauvegarder chaque partie des données dans le stockage du téléphone (localStorage)
-const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons" };
+const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded" };
 // Catégories fournies par défaut au tout premier lancement de l'appli (l'utilisateur peut les modifier/supprimer ensuite)
 const DEFAULT_CATS = {
   depenses: ["courses", "loisirs", "voiture", "gasoil", "salle", "cadeaux", "groupama", "resto", "canal", "maman", "autres"],
@@ -482,16 +482,6 @@ function renderAnnee() {
       </div>
       <p class="hint" style="margin-top:14px;">Le compte courant est calculé automatiquement : solde de départ + somme de tous les revenus et dépenses enregistrés. Le patrimoine total additionne ce compte courant et les comptes que tu ajoutes toi-même ci-dessus.</p>
     </div>
-
-    <div class="card card-pad" style="margin-top:20px;">
-      <h3 class="section-title">Sauvegarde</h3>
-      <p class="hint" style="margin:0 0 14px;">Tes données restent uniquement sur cet appareil. Pour les retrouver sur un autre téléphone ou un PC, exporte un fichier de sauvegarde ici, transfère-le (mail, drive, clé USB...), puis importe-le sur l'autre appareil.</p>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-outline" id="exportDataBtn">⬇ Exporter mes données</button>
-        <button type="button" class="btn btn-outline" id="importDataBtn">⬆ Importer une sauvegarde</button>
-        <input type="file" id="importDataFile" accept="application/json" style="display:none;" />
-      </div>
-    </div>
   `;
 }
 
@@ -636,20 +626,6 @@ function attachViewHandlers() {
   document.querySelectorAll("[data-asset-del]").forEach((btn) => {
     btn.onclick = () => { state.assets = state.assets.filter((a) => a.id !== btn.dataset.assetDel); persist("assets"); render(); };
   });
-
-  // Sauvegarde : le bouton "Exporter" télécharge un fichier .json ; le bouton "Importer" ouvre le sélecteur de fichier
-  // caché, et dès qu'un fichier est choisi, importDataFile() s'en charge (voir plus haut).
-  const exportDataBtn = document.getElementById("exportDataBtn");
-  if (exportDataBtn) exportDataBtn.onclick = () => exportData();
-  const importDataBtn = document.getElementById("importDataBtn");
-  const importDataFileInput = document.getElementById("importDataFile");
-  if (importDataBtn && importDataFileInput) {
-    importDataBtn.onclick = () => importDataFileInput.click();
-    importDataFileInput.onchange = () => {
-      if (importDataFileInput.files && importDataFileInput.files[0]) importDataFile(importDataFileInput.files[0]);
-      importDataFileInput.value = "";
-    };
-  }
 }
 
 /* ---------- Import (parseur minimal, sans dépendance externe) ---------- */
@@ -1002,6 +978,107 @@ function shiftMonth(delta) {
   render();
 }
 
+/* ---------- Fenêtre Réglages (gestion de l'appli : tutoriel, sauvegarde) ---------- */
+// Regroupe les actions qui concernent l'appli elle-même (pas les données financières, qui restent
+// dans leurs onglets respectifs) : revoir le tutoriel, exporter/importer une sauvegarde.
+function openSettingsModal() {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="modal-backdrop" id="settingsBackdrop">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>Réglages</h3>
+          <button type="button" id="closeSettings">✕</button>
+        </div>
+        <h3 class="section-title" style="margin-top:4px;">Tutoriel</h3>
+        <button type="button" class="btn btn-outline" id="replayTutoBtn" style="width:100%;justify-content:center;margin-bottom:20px;">🔎 Revoir le tutoriel de bienvenue</button>
+
+        <h3 class="section-title">Sauvegarde</h3>
+        <p class="hint" style="margin:0 0 14px;">Tes données restent uniquement sur cet appareil. Pour les retrouver sur un autre téléphone ou un PC, exporte un fichier de sauvegarde ici, transfère-le (mail, drive, clé USB...), puis importe-le sur l'autre appareil.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline" id="exportDataBtn">⬇ Exporter mes données</button>
+          <button type="button" class="btn btn-outline" id="importDataBtn">⬆ Importer une sauvegarde</button>
+          <input type="file" id="importDataFile" accept="application/json" style="display:none;" />
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById("settingsBackdrop").onclick = (e) => { if (e.target.id === "settingsBackdrop") root.innerHTML = ""; };
+  document.getElementById("closeSettings").onclick = () => (root.innerHTML = "");
+  document.getElementById("replayTutoBtn").onclick = () => { root.innerHTML = ""; showOnboarding(); };
+  document.getElementById("exportDataBtn").onclick = () => exportData();
+  const importDataBtn = document.getElementById("importDataBtn");
+  const importDataFileInput = document.getElementById("importDataFile");
+  importDataBtn.onclick = () => importDataFileInput.click();
+  importDataFileInput.onchange = () => {
+    if (importDataFileInput.files && importDataFileInput.files[0]) importDataFile(importDataFileInput.files[0]);
+    importDataFileInput.value = "";
+  };
+}
+
+/* ---------- Tutoriel de bienvenue (onboarding) ---------- */
+// Contenu des écrans du tutoriel : chaque étape a un emoji (illustration), un titre et un texte court.
+// Pour ajouter/modifier une étape, il suffit de modifier ce tableau — le reste (points, boutons, navigation) s'adapte tout seul.
+const ONBOARDING_SLIDES = [
+  { icon: "📒", title: "Bienvenue dans Le Carnet", text: "Ton budget, géré simplement. Toutes tes données restent uniquement sur cet appareil — rien n'est jamais envoyé sur un serveur." },
+  { icon: "📊", title: "Le tableau de bord", text: "En un coup d'œil : ce qu'il te reste à vivre ce mois-ci, ce que tu as prévu vs réellement dépensé par catégorie, et la répartition de tes dépenses." },
+  { icon: "➕", title: "Ajouter une transaction", text: "Le bouton vert « + » ajoute une dépense ou un revenu. Tape ensuite sur n'importe quelle transaction de la liste pour la modifier ou la supprimer." },
+  { icon: "📥", title: "Importer ton relevé bancaire", text: "Dans l'onglet Transactions, importe directement le CSV exporté par ta banque (Crédit Agricole reconnu automatiquement) : les catégories se remplissent toutes seules, à toi de corriger si besoin." },
+  { icon: "🎯", title: "Budget prévu", text: "Fixe un montant prévu par catégorie. Tape sur l'icône d'une catégorie pour changer son emoji, ou sur le ✕ pour la supprimer." },
+  { icon: "💰", title: "Année & objectif", text: "Suis ton reste par mois sur toute l'année, ton patrimoine total (comptes ajoutés à la main + compte courant automatique), et fixe un objectif d'épargne avec une date." },
+  { icon: "🔄", title: "Sauvegarde", text: "Dans Année & objectif, exporte régulièrement tes données (fichier .json) pour les garder en sécurité ou les transférer vers un autre appareil." },
+];
+
+let onboardingStep = 0;
+// Affiche le tutoriel. Appelée automatiquement au tout premier lancement (voir init()), ou manuellement
+// via le bouton "Revoir le tutoriel" dans les réglages.
+function showOnboarding() {
+  onboardingStep = 0;
+  document.getElementById("onboardingRoot").innerHTML = `
+    <div class="onboarding-backdrop" id="obBackdrop">
+      <div class="onboarding-card" id="obCard">
+        <button type="button" class="onboarding-skip" id="obSkip">Passer</button>
+        <div id="obContent"></div>
+        <div class="onboarding-dots" id="obDots"></div>
+        <div class="onboarding-nav">
+          <button type="button" class="btn btn-outline" id="obPrev">Précédent</button>
+          <button type="button" class="btn btn-solid" id="obNext">Suivant</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById("obSkip").onclick = closeOnboarding;
+  document.getElementById("obPrev").onclick = () => { onboardingStep = Math.max(0, onboardingStep - 1); paintOnboarding(); };
+  document.getElementById("obNext").onclick = () => {
+    if (onboardingStep >= ONBOARDING_SLIDES.length - 1) { closeOnboarding(); return; }
+    onboardingStep++; paintOnboarding();
+  };
+  paintOnboarding();
+}
+// (Re)dessine uniquement le contenu de l'étape actuelle + les points de navigation, sans reconstruire toute la carte
+function paintOnboarding() {
+  const s = ONBOARDING_SLIDES[onboardingStep];
+  const isLast = onboardingStep === ONBOARDING_SLIDES.length - 1;
+  document.getElementById("obContent").innerHTML = `
+    <div class="onboarding-icon">${s.icon}</div>
+    <h3 class="onboarding-title">${esc(s.title)}</h3>
+    <p class="onboarding-text">${esc(s.text)}</p>
+  `;
+  document.getElementById("obDots").innerHTML = ONBOARDING_SLIDES.map((_, i) =>
+    `<span class="onboarding-dot ${i === onboardingStep ? "active" : ""}" data-ob-dot="${i}"></span>`
+  ).join("");
+  document.querySelectorAll("[data-ob-dot]").forEach((dot) => {
+    dot.onclick = () => { onboardingStep = parseInt(dot.dataset.obDot, 10); paintOnboarding(); };
+  });
+  document.getElementById("obPrev").style.visibility = onboardingStep === 0 ? "hidden" : "visible";
+  document.getElementById("obNext").textContent = isLast ? "Commencer" : "Suivant";
+}
+// Ferme le tutoriel et retient définitivement qu'il a déjà été vu (pour ne pas le réafficher au prochain lancement)
+function closeOnboarding() {
+  document.getElementById("onboardingRoot").innerHTML = "";
+  localStorage.setItem(LS_KEYS.onboarded, "1");
+}
+
 /* ---------- Init ---------- */
 function init() {
   loadState();
@@ -1010,10 +1087,14 @@ function init() {
 
   document.getElementById("prevMonth").onclick = () => shiftMonth(-1);
   document.getElementById("nextMonth").onclick = () => shiftMonth(1);
+  document.getElementById("settingsBtn").onclick = () => openSettingsModal();
   document.querySelectorAll("#tabs button").forEach((b) => { b.onclick = () => { state.tab = b.dataset.tab; render(); }; });
   document.getElementById("fabAdd").onclick = () => openTxModal(null);
 
   render();
+
+  // Tutoriel : si la clé "onboarded" n'existe pas encore dans le stockage, c'est le tout premier lancement -> on l'affiche
+  if (!localStorage.getItem(LS_KEYS.onboarded)) showOnboarding();
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
