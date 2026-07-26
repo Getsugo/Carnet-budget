@@ -923,13 +923,12 @@ function openTxModal(existing) {
           <div class="field"><label>Montant (€)</label><input type="number" step="0.01" min="0" required id="fMontant" placeholder="0,00" value="${existing ? existing.montant : ""}" /></div>
           <div class="field"><label>Date</label><input type="date" id="fDate" value="${existing ? existing.date : todayISO}" /></div>
           <div class="field"><label>Description (optionnel)</label><input type="text" id="fDesc" placeholder="ex : courses Leclerc" value="${existing ? esc(existing.description || "") : ""}" /></div>
-          <div class="field">
+          <div class="field cat-field-wrap">
             <label>Catégorie</label>
-            <!-- Champ texte relié à une <datalist> : le navigateur propose les catégories existantes au fur et à mesure
-                 de la frappe (comme une recherche), mais on peut aussi taper un nom qui n'existe pas encore pour
-                 créer une nouvelle catégorie directement (elle sera ajoutée automatiquement à l'enregistrement). -->
-            <input type="text" id="fCat" list="fCatList" autocomplete="off" placeholder="tape pour chercher ou créer une catégorie" value="${esc(currentCat)}" />
-            <datalist id="fCatList">${catList.map((c) => `<option value="${esc(c)}"></option>`).join("")}</datalist>
+            <!-- Champ texte + liste de suggestions "maison" (pas de <datalist> natif : mal supporté et peu fiable
+                 sur les claviers Android). Le filtrage se fait nous-mêmes en JS ci-dessous, à chaque frappe. -->
+            <input type="text" id="fCat" autocomplete="off" placeholder="tape pour chercher ou créer une catégorie" value="${esc(currentCat)}" />
+            <div class="cat-suggestions" id="fCatSuggestions"></div>
           </div>
           <button type="submit" class="submit-btn">${isEdit ? "Enregistrer les modifications" : "Enregistrer"}</button>
           ${isEdit ? `<button type="button" class="link-btn" id="deleteTxBtn" style="width:100%;margin-top:10px;text-align:center;color:var(--rust);border-color:var(--rust-light);padding:10px;">Supprimer cette transaction</button>` : ""}
@@ -940,6 +939,28 @@ function openTxModal(existing) {
     document.getElementById("closeModal").onclick = () => (root.innerHTML = "");
     document.querySelectorAll(".type-switch button").forEach((b) => {
       b.onclick = () => { type = b.dataset.type; paint(); };
+    });
+    // Suggestions de catégorie : à chaque frappe/focus, on filtre catList "à la main" (inclut le texte tapé,
+    // insensible à la casse) et on affiche le résultat dans une liste custom sous le champ.
+    const fCat = document.getElementById("fCat");
+    const fCatSuggestions = document.getElementById("fCatSuggestions");
+    function renderCatSuggestions() {
+      const q = fCat.value.toLowerCase().trim();
+      const matches = catList.filter((c) => c.toLowerCase().includes(q));
+      if (matches.length === 0) { fCatSuggestions.classList.remove("show"); fCatSuggestions.innerHTML = ""; return; }
+      fCatSuggestions.innerHTML = matches.map((c) => `<div class="cat-suggestion-item" data-cat-suggest="${esc(c)}">${categoryIcon(c)} ${esc(c)}</div>`).join("");
+      fCatSuggestions.classList.add("show");
+    }
+    fCat.addEventListener("focus", renderCatSuggestions);
+    fCat.addEventListener("input", renderCatSuggestions);
+    // Un petit délai avant de cacher la liste au "blur" : sinon le clic sur une suggestion n'a pas le temps de se déclencher
+    // (le blur du champ arrive avant le clic sur l'élément de la liste)
+    fCat.addEventListener("blur", () => setTimeout(() => fCatSuggestions.classList.remove("show"), 150));
+    fCatSuggestions.addEventListener("click", (e) => {
+      const item = e.target.closest("[data-cat-suggest]");
+      if (!item) return;
+      fCat.value = item.dataset.catSuggest;
+      fCatSuggestions.classList.remove("show");
     });
     const deleteTxBtn = document.getElementById("deleteTxBtn");
     if (deleteTxBtn) deleteTxBtn.onclick = () => {

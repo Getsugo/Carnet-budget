@@ -177,6 +177,13 @@ main { padding: 20px 0 100px; }
 @media (min-width: 480px) { .settings-grid { grid-template-columns: 1fr 1fr; } }
 .field label { display: block; font-size: 13px; color: var(--ink60); margin-bottom: 6px; }
 .field input, .field select { width: 100%; padding: 10px 12px; border-radius: 11px; border: 1px solid var(--line-strong); background: var(--paper-dim); font-family: var(--font-mono); font-size: 16px; }
+.cat-field-wrap { position: relative; }
+.cat-suggestions { display: none; position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 50; max-height: 210px; overflow-y: auto; background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 16px 40px rgba(0,0,0,0.5); }
+.cat-suggestions.show { display: block; }
+.cat-suggestion-item { padding: 11px 14px; font-size: 14px; text-transform: capitalize; cursor: pointer; }
+.cat-suggestion-item + .cat-suggestion-item { border-top: 1px dashed var(--line); }
+.cat-suggestion-item:active { background: var(--paper-dim); }
+@media (hover: hover) { .cat-suggestion-item:hover { background: var(--paper-dim); } }
 
 .yearly-bars-wrap, .trend-wrap { overflow-x: auto; margin: 0 -20px; padding: 0 20px 4px; }
 .yearly-bars { display: flex; align-items: flex-end; gap: 10px; height: 180px; padding-top: 10px; width: max-content; min-width: 100%; }
