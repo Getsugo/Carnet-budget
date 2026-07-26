@@ -482,7 +482,64 @@ function renderAnnee() {
       </div>
       <p class="hint" style="margin-top:14px;">Le compte courant est calculé automatiquement : solde de départ + somme de tous les revenus et dépenses enregistrés. Le patrimoine total additionne ce compte courant et les comptes que tu ajoutes toi-même ci-dessus.</p>
     </div>
+
+    <div class="card card-pad" style="margin-top:20px;">
+      <h3 class="section-title">Sauvegarde</h3>
+      <p class="hint" style="margin:0 0 14px;">Tes données restent uniquement sur cet appareil. Pour les retrouver sur un autre téléphone ou un PC, exporte un fichier de sauvegarde ici, transfère-le (mail, drive, clé USB...), puis importe-le sur l'autre appareil.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-outline" id="exportDataBtn">⬇ Exporter mes données</button>
+        <button type="button" class="btn btn-outline" id="importDataBtn">⬆ Importer une sauvegarde</button>
+        <input type="file" id="importDataFile" accept="application/json" style="display:none;" />
+      </div>
+    </div>
   `;
+}
+
+/* ---------- Sauvegarde / restauration (export-import manuel) ---------- */
+// Regroupe toutes les données de l'appli dans un seul objet, puis déclenche le téléchargement d'un fichier .json
+// (c'est ce fichier qu'on transfère à la main vers un autre appareil pour "synchroniser")
+function exportData() {
+  const payload = {
+    _app: "le-carnet", _version: 1, _exportedAt: new Date().toISOString(),
+    tx: state.tx, budgets: state.budgets, cats: state.cats, assets: state.assets,
+    settings: state.settings, catIcons: state.catIcons,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `le-carnet-sauvegarde-${date}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Lit un fichier de sauvegarde .json (créé par exportData ci-dessus) et REMPLACE toutes les données actuelles
+// par celles du fichier. Une confirmation est demandée avant, car c'est une action destructive et irréversible.
+function importDataFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try { data = JSON.parse(String(reader.result)); }
+    catch (e) { alert("Ce fichier n'est pas une sauvegarde valide."); return; }
+    if (!data || typeof data !== "object" || !Array.isArray(data.tx)) {
+      alert("Ce fichier n'est pas une sauvegarde valide du Carnet.");
+      return;
+    }
+    if (!confirm("Importer cette sauvegarde va REMPLACER toutes les données actuellement sur cet appareil. Continuer ?")) return;
+    state.tx = data.tx || [];
+    state.budgets = data.budgets || {};
+    state.cats = data.cats || DEFAULT_CATS;
+    state.assets = data.assets || [];
+    state.settings = { ...state.settings, ...(data.settings || {}) };
+    state.catIcons = data.catIcons || {};
+    persist();
+    render();
+    alert("Sauvegarde importée avec succès.");
+  };
+  reader.readAsText(file);
 }
 
 /* ---------- Handlers de vue ---------- */
@@ -579,6 +636,20 @@ function attachViewHandlers() {
   document.querySelectorAll("[data-asset-del]").forEach((btn) => {
     btn.onclick = () => { state.assets = state.assets.filter((a) => a.id !== btn.dataset.assetDel); persist("assets"); render(); };
   });
+
+  // Sauvegarde : le bouton "Exporter" télécharge un fichier .json ; le bouton "Importer" ouvre le sélecteur de fichier
+  // caché, et dès qu'un fichier est choisi, importDataFile() s'en charge (voir plus haut).
+  const exportDataBtn = document.getElementById("exportDataBtn");
+  if (exportDataBtn) exportDataBtn.onclick = () => exportData();
+  const importDataBtn = document.getElementById("importDataBtn");
+  const importDataFileInput = document.getElementById("importDataFile");
+  if (importDataBtn && importDataFileInput) {
+    importDataBtn.onclick = () => importDataFileInput.click();
+    importDataFileInput.onchange = () => {
+      if (importDataFileInput.files && importDataFileInput.files[0]) importDataFile(importDataFileInput.files[0]);
+      importDataFileInput.value = "";
+    };
+  }
 }
 
 /* ---------- Import (parseur minimal, sans dépendance externe) ---------- */
@@ -838,7 +909,6 @@ function openTxModal(existing) {
   function paint() {
     const currentCat = existing ? existing.categorie : "";
     const catList = optionsFor(type);
-    const catInList = currentCat && catList.includes(currentCat);
     root.innerHTML = `
       <div class="modal-backdrop" id="backdrop">
         <form class="modal" id="addForm">
@@ -855,14 +925,11 @@ function openTxModal(existing) {
           <div class="field"><label>Description (optionnel)</label><input type="text" id="fDesc" placeholder="ex : courses Leclerc" value="${existing ? esc(existing.description || "") : ""}" /></div>
           <div class="field">
             <label>Catégorie</label>
-            <div class="cat-row-input">
-              ${catInList || !currentCat ? `
-              <select id="fCat">${catList.map((c) => `<option value="${esc(c)}" ${c === currentCat ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
-              <button type="button" class="link-btn" id="newCatBtn">Nouvelle</button>
-              ` : `
-              <input type="text" id="fCat" value="${esc(currentCat)}" />
-              `}
-            </div>
+            <!-- Champ texte relié à une <datalist> : le navigateur propose les catégories existantes au fur et à mesure
+                 de la frappe (comme une recherche), mais on peut aussi taper un nom qui n'existe pas encore pour
+                 créer une nouvelle catégorie directement (elle sera ajoutée automatiquement à l'enregistrement). -->
+            <input type="text" id="fCat" list="fCatList" autocomplete="off" placeholder="tape pour chercher ou créer une catégorie" value="${esc(currentCat)}" />
+            <datalist id="fCatList">${catList.map((c) => `<option value="${esc(c)}"></option>`).join("")}</datalist>
           </div>
           <button type="submit" class="submit-btn">${isEdit ? "Enregistrer les modifications" : "Enregistrer"}</button>
           ${isEdit ? `<button type="button" class="link-btn" id="deleteTxBtn" style="width:100%;margin-top:10px;text-align:center;color:var(--rust);border-color:var(--rust-light);padding:10px;">Supprimer cette transaction</button>` : ""}
@@ -874,11 +941,6 @@ function openTxModal(existing) {
     document.querySelectorAll(".type-switch button").forEach((b) => {
       b.onclick = () => { type = b.dataset.type; paint(); };
     });
-    const newCatBtn = document.getElementById("newCatBtn");
-    if (newCatBtn) newCatBtn.onclick = () => {
-      const wrap = document.querySelector(".cat-row-input");
-      wrap.innerHTML = `<input type="text" id="fCat" placeholder="nom de la catégorie" autofocus />`;
-    };
     const deleteTxBtn = document.getElementById("deleteTxBtn");
     if (deleteTxBtn) deleteTxBtn.onclick = () => {
       state.tx = state.tx.filter((t) => t.id !== existing.id);
