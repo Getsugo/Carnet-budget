@@ -339,13 +339,49 @@ function renderTxRowsHTML() {
     </div>
   `).join("");
 }
+// Construit le bandeau "recatégoriser en masse" : n'apparaît que si une recherche est active et trouve des résultats.
+// Permet de changer la catégorie de TOUTES les transactions correspondant à la recherche en une seule fois
+// (ex : chercher "Oxytif" puis choisir "salle" pour corriger d'un coup toutes les transactions mal catégorisées).
+function renderBulkBarHTML() {
+  const q = txFilterState.query.trim();
+  if (!q) return "";
+  const list = getFilteredTx();
+  if (list.length === 0) return "";
+  const allCats = [...new Set([...state.cats.depenses, ...state.cats.revenus])];
+  return `
+    <div class="bulk-cat-bar">
+      <div class="bulk-cat-bar-row">
+        <span class="bulk-cat-count">${list.length} transaction${list.length > 1 ? "s" : ""} trouvée${list.length > 1 ? "s" : ""}</span>
+        <select id="bulkCatSelect">${allCats.map((c) => `<option value="${esc(c)}">${categoryIcon(c)} ${esc(c)}</option>`).join("")}</select>
+        <button type="button" class="btn btn-solid" id="bulkApplyBtn">Recatégoriser</button>
+      </div>
+      ${!txFilterState.allMonths ? `<p class="hint" style="margin:8px 0 0;">Astuce : coche « Tous les mois » ci-dessus pour corriger aussi les mois précédents, pas seulement celui-ci.</p>` : ""}
+    </div>
+  `;
+}
+// Applique le changement de catégorie choisi dans le bandeau ci-dessus à toutes les transactions actuellement filtrées
+function attachBulkBarHandlers() {
+  const btn = document.getElementById("bulkApplyBtn");
+  if (!btn) return;
+  btn.onclick = () => {
+    const newCat = document.getElementById("bulkCatSelect").value;
+    const list = getFilteredTx();
+    if (!confirm(`Recatégoriser ${list.length} transaction(s) en « ${newCat} » ?`)) return;
+    const ids = new Set(list.map((t) => t.id));
+    state.tx.forEach((t) => { if (ids.has(t.id)) t.categorie = newCat; });
+    persist("tx");
+    render();
+  };
+}
 // Rafraîchit uniquement la liste des transactions (appelée à chaque frappe dans la recherche, ou au changement
 // du filtre "tous les mois"), sans reconstruire toute la page — ça évite de perdre le focus du champ de recherche.
 function updateTxList() {
   const inner = document.getElementById("txListInner");
+  const bulkWrap = document.getElementById("bulkBarWrap");
   if (!inner) return;
   inner.innerHTML = renderTxRowsHTML();
   attachTxRowHandlers();
+  if (bulkWrap) { bulkWrap.innerHTML = renderBulkBarHTML(); attachBulkBarHandlers(); }
 }
 
 function renderTransactions() {
@@ -370,6 +406,7 @@ function renderTransactions() {
       <input type="text" id="txSearch" class="tx-search" placeholder="🔍 Rechercher (description ou catégorie)" autocomplete="off" value="${esc(txFilterState.query)}" />
       <label class="tx-filter-toggle"><input type="checkbox" id="txAllMonths" ${txFilterState.allMonths ? "checked" : ""} /> Tous les mois</label>
     </div>
+    <div id="bulkBarWrap">${renderBulkBarHTML()}</div>
     <div class="card">
       <div class="receipt-edge"></div>
       <div class="tx-list" id="txListInner">${renderTxRowsHTML()}</div>
@@ -696,6 +733,7 @@ function attachTxRowHandlers() {
 function attachViewHandlers() {
   // Supprimer / éditer une transaction (voir attachTxRowHandlers ci-dessous, réutilisée aussi quand on filtre la liste)
   attachTxRowHandlers();
+  attachBulkBarHandlers();
   // Barre de recherche/filtre des transactions : à chaque frappe ou changement de case, on met à jour txFilterState
   // puis on redessine seulement la liste (updateTxList), pas toute la page, pour ne pas perdre le focus du champ.
   const txSearchInput = document.getElementById("txSearch");
@@ -1231,10 +1269,12 @@ const ONBOARDING_SLIDES = [
   { icon: "📒", title: "Bienvenue dans Le Carnet", text: "Ton budget, géré simplement. Toutes tes données restent uniquement sur cet appareil — rien n'est jamais envoyé sur un serveur." },
   { icon: "📊", title: "Le tableau de bord", text: "En un coup d'œil : ce qu'il te reste à vivre ce mois-ci, ce que tu as prévu vs réellement dépensé par catégorie, et la répartition de tes dépenses." },
   { icon: "➕", title: "Ajouter une transaction", text: "Le bouton vert « + » ajoute une dépense ou un revenu. Tape ensuite sur n'importe quelle transaction de la liste pour la modifier ou la supprimer." },
-  { icon: "📥", title: "Importer ton relevé bancaire", text: "Dans l'onglet Transactions, importe directement le CSV exporté par ta banque (Crédit Agricole reconnu automatiquement) : les catégories se remplissent toutes seules, à toi de corriger si besoin." },
-  { icon: "🎯", title: "Budget prévu", text: "Fixe un montant prévu par catégorie. Tape sur l'icône d'une catégorie pour changer son emoji, ou sur le ✕ pour la supprimer." },
+  { icon: "🔍", title: "Rechercher et recatégoriser en masse", text: "Dans Transactions, la recherche retrouve toutes les opérations d'un commerçant (ex : « Oxytif »). Si elles sont mal catégorisées, choisis la bonne catégorie dans le bandeau qui apparaît pour toutes les corriger d'un coup — coche « Tous les mois » pour remonter dans tout l'historique." },
+  { icon: "📥", title: "Importer ton relevé bancaire", text: "Toujours dans Transactions, importe directement le CSV exporté par ta banque (Crédit Agricole reconnu automatiquement) : les catégories se remplissent toutes seules, à toi de corriger si besoin." },
+  { icon: "🎯", title: "Budget prévu", text: "Fixe un montant prévu par catégorie. Tape sur l'icône d'une catégorie pour changer son emoji, ou sur le ✕ pour la supprimer. Un tableau compare aussi tes dépenses réelles sur les 6 derniers mois." },
+  { icon: "🔁", title: "Transactions récurrentes", text: "Toujours dans Budget prévu : configure une fois ton loyer, tes abonnements ou ton salaire, et ils se recréeront automatiquement chaque mois, au jour indiqué." },
   { icon: "💰", title: "Année & objectif", text: "Suis ton reste par mois sur toute l'année, ton patrimoine total (comptes ajoutés à la main + compte courant automatique), et fixe un objectif d'épargne avec une date." },
-  { icon: "🔄", title: "Sauvegarde", text: "Dans Année & objectif, exporte régulièrement tes données (fichier .json) pour les garder en sécurité ou les transférer vers un autre appareil." },
+  { icon: "⚙️", title: "Les réglages", text: "L'icône ⚙️ en haut à droite regroupe ce tutoriel (pour le revoir quand tu veux), l'export de tes données (fichier de sauvegarde ou CSV pour Excel), l'import d'une sauvegarde, et un code PIN optionnel pour protéger l'ouverture de l'appli." },
 ];
 
 let onboardingStep = 0;
