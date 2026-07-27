@@ -7,8 +7,10 @@ const DEFAULT_CATS = {
   revenus: ["salaire", "caf", "maman", "cpam", "wtw", "mamy"],
 };
 const MOIS_FR = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
-// Couleurs utilisées pour colorer automatiquement les catégories (choisies au hasard selon le nom, voir hashColor)
-const PALETTE = ["#37D399","#F0BE4E","#A78BFA","#4FC3E8","#FB7A8A","#8FD14F","#E89A4D","#6C8FE8","#E8739E","#4FD1B5"];
+// Couleurs utilisées pour colorer automatiquement les catégories. Générées à intervalles réguliers sur la roue
+// chromatique (12 teintes espacées de 30°, dans un ordre entrelacé) plutôt que choisies à l'œil, pour garantir
+// que deux catégories voisines dans la liste (voir hashColor) aient toujours des couleurs bien distinctes.
+const PALETTE = ["#DA6262","#62DADA","#9EDA62","#9E62DA","#DA9E62","#629EDA","#62DA62","#DA62DA","#DADA62","#6262DA","#62DA9E","#DA629E"];
 // Emoji par défaut pour chaque catégorie connue. L'utilisateur peut les remplacer (voir state.catIcons ci-dessous).
 const CATEGORY_ICONS = {
   courses: "🛒", loisirs: "🎉", voiture: "🚗", gasoil: "⛽", salle: "🏋️", cadeaux: "🎁",
@@ -50,12 +52,14 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 // alphabétique de toutes les catégories connues (dépenses + revenus confondues) -> tant qu'il y a 10 catégories ou
 // moins (la taille de PALETTE), chacune a une couleur garantie différente de ses voisines.
 const hashColor = (s) => {
-  const allCats = [...new Set([...(state.cats?.depenses || []), ...(state.cats?.revenus || [])])].sort();
+  const dep = (state.cats && state.cats.depenses) || [];
+  const rev = (state.cats && state.cats.revenus) || [];
+  const allCats = [...new Set([...dep, ...rev])].sort();
   let idx = allCats.indexOf(s);
   if (idx === -1) { let h = 0; for (let i = 0; i < s.length; i++) h = s.charCodeAt(i) + ((h << 5) - h); idx = Math.abs(h); } // catégorie inconnue/supprimée : on retombe sur un hash
   return PALETTE[idx % PALETTE.length];
 };
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = (s) => String(s === undefined || s === null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ---------- Stockage local ---------- */
 // Recharge toutes les données sauvegardées depuis le stockage du téléphone au démarrage de l'appli.
@@ -435,7 +439,7 @@ function renderTransactions() {
 // On retire aussi son montant prévu de tous les mois du budget, pour ne pas laisser de ligne fantôme.
 function removeCategory(type, cat) {
   state.cats[type] = state.cats[type].filter((c) => c !== cat);
-  Object.keys(state.budgets).forEach((mk) => { if (state.budgets[mk]?.[type]) delete state.budgets[mk][type][cat]; });
+  Object.keys(state.budgets).forEach((mk) => { if (state.budgets[mk] && state.budgets[mk][type]) delete state.budgets[mk][type][cat]; });
   persist("cats"); persist("budgets");
 }
 
@@ -484,7 +488,7 @@ function renderBudget() {
       <span class="cat-icon-btn" data-icon-edit="${type}|${esc(cat)}" title="Changer l'icône">${categoryIcon(cat)}</span>
       <span class="name">${esc(cat)}</span>
       <div class="budget-input-wrap">
-        <input type="number" step="0.01" placeholder="0" data-prevu="${type}|${esc(cat)}" value="${(mb[type] || {})[cat] ?? ""}" />
+        <input type="number" step="0.01" placeholder="0" data-prevu="${type}|${esc(cat)}" value="${(mb[type] || {})[cat] !== undefined ? (mb[type] || {})[cat] : ""}" />
         <span style="color:var(--ink40)">€</span>
       </div>
       <button type="button" class="cat-del-btn" data-cat-del="${type}|${esc(cat)}" title="Supprimer cette catégorie">✕</button>
@@ -539,11 +543,11 @@ function renderBudget() {
             <select data-rec-field="categorie" class="rec-select">
               ${(r.type === "depense" ? state.cats.depenses : state.cats.revenus).map((c) => `<option value="${esc(c)}" ${c === r.categorie ? "selected" : ""}>${esc(c)}</option>`).join("")}
             </select>
-            <div class="budget-input-wrap"><input type="number" step="0.01" data-rec-field="montant" value="${r.montant ?? ""}" placeholder="0" /><span style="color:var(--ink40)">€</span></div>
+            <div class="budget-input-wrap"><input type="number" step="0.01" data-rec-field="montant" value="${r.montant !== undefined ? r.montant : ""}" placeholder="0" /><span style="color:var(--ink40)">€</span></div>
           </div>
           <div class="recurring-item-row">
             <span class="hint" style="margin:0;">Chaque mois, le jour</span>
-            <input type="number" min="1" max="28" data-rec-field="jour" value="${r.jour ?? 1}" style="width:60px;text-align:center;padding:6px;border-radius:8px;border:1px solid var(--line-strong);background:var(--paper-dim);" />
+            <input type="number" min="1" max="28" data-rec-field="jour" value="${r.jour !== undefined ? r.jour : 1}" style="width:60px;text-align:center;padding:6px;border-radius:8px;border:1px solid var(--line-strong);background:var(--paper-dim);" />
           </div>
         </div>
       `).join("")}
@@ -619,7 +623,7 @@ function renderAnnee() {
         <div class="asset-row" data-asset-id="${a.id}">
           <input type="text" class="asset-name" data-asset-field="nom" placeholder="Nom (ex : Livret A, Trade République...)" value="${esc(a.nom)}" />
           <div class="budget-input-wrap">
-            <input type="number" step="0.01" class="asset-amount" data-asset-field="montant" value="${a.montant ?? ""}" placeholder="0" />
+            <input type="number" step="0.01" class="asset-amount" data-asset-field="montant" value="${a.montant !== undefined ? a.montant : ""}" placeholder="0" />
             <span style="color:var(--ink40);">€</span>
           </div>
           <button class="tx-del" data-asset-del="${a.id}">✕</button>
@@ -641,7 +645,7 @@ function renderAnnee() {
         </div>
         <div class="field">
           <label>Date butoir de l'objectif</label>
-          <input type="month" id="setDateObjectif" value="${state.settings.dateObjectif || ""}" />
+          <div class="date-field-wrap"><input type="month" id="setDateObjectif" value="${state.settings.dateObjectif || ""}" /></div>
         </div>
         <div class="field">
           <label>Solde de départ du compte courant (€)</label>
@@ -680,7 +684,7 @@ function exportData() {
 function exportCSV() {
   // Met une valeur entre guillemets si elle contient le séparateur, un guillemet ou un retour à la ligne (règle CSV standard)
   const csvField = (v) => {
-    const s = String(v ?? "");
+    const s = String(v !== undefined && v !== null ? v : "");
     return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const rows = [["date", "type", "montant", "description", "categorie"]];
@@ -1132,7 +1136,7 @@ function openTxModal(existing) {
             <button type="button" data-type="revenu" class="${type === "revenu" ? "active-rev" : ""}">Revenu</button>
           </div>
           <div class="field"><label>Montant (€)</label><input type="number" step="0.01" min="0" required id="fMontant" placeholder="0,00" value="${existing ? existing.montant : ""}" /></div>
-          <div class="field"><label>Date</label><input type="date" id="fDate" value="${existing ? existing.date : todayISO}" /></div>
+          <div class="field"><label>Date</label><div class="date-field-wrap"><input type="date" id="fDate" value="${existing ? existing.date : todayISO}" /></div></div>
           <div class="field"><label>Description (optionnel)</label><input type="text" id="fDesc" placeholder="ex : courses Leclerc" value="${existing ? esc(existing.description || "") : ""}" /></div>
           <div class="field cat-field-wrap">
             <label>Catégorie</label>
