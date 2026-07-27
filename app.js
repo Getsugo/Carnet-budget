@@ -1,6 +1,6 @@
 /* ---------- Constantes ---------- */
 // Clés utilisées pour sauvegarder chaque partie des données dans le stockage du téléphone (localStorage)
-const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded" };
+const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin" };
 // Catégories fournies par défaut au tout premier lancement de l'appli (l'utilisateur peut les modifier/supprimer ensuite)
 const DEFAULT_CATS = {
   depenses: ["courses", "loisirs", "voiture", "gasoil", "salle", "cadeaux", "groupama", "resto", "canal", "maman", "autres"],
@@ -34,6 +34,7 @@ let state = {
   cats: JSON.parse(JSON.stringify(DEFAULT_CATS)), // liste des catégories existantes (copie pour ne pas modifier DEFAULT_CATS par erreur)
   catIcons: {}, // surcharge des icônes par catégorie choisie par l'utilisateur : { "courses": "🥖" }
   assets: [], // comptes/livrets/investissements saisis manuellement : {id, nom, montant}
+  recurring: [], // transactions récurrentes (loyer, abonnements, salaire...) : {id, type, montant, description, categorie, jour, dernierMoisApplique}
   month: new Date().toISOString().slice(0, 7), // mois actuellement affiché, format "AAAA-MM"
   tab: "dashboard", // onglet actuellement affiché
 };
@@ -56,6 +57,7 @@ function loadState() {
   try { const v = localStorage.getItem(LS_KEYS.cats); if (v) state.cats = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.assets); if (v) state.assets = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.catIcons); if (v) state.catIcons = JSON.parse(v); } catch (e) {}
+  try { const v = localStorage.getItem(LS_KEYS.recurring); if (v) state.recurring = JSON.parse(v); } catch (e) {}
   if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = ""; // rétrocompatibilité si le réglage n'existait pas encore
   // Au démarrage, on se place automatiquement sur le mois de la transaction la plus récente (plutôt que le mois calendaire actuel)
   if (state.tx.length) { const months = state.tx.map((t) => monthKey(t.date)).sort(); state.month = months[months.length - 1]; }
@@ -70,6 +72,7 @@ function persist(part) {
   if (part === "cats" || !part) localStorage.setItem(LS_KEYS.cats, JSON.stringify(state.cats));
   if (part === "assets" || !part) localStorage.setItem(LS_KEYS.assets, JSON.stringify(state.assets));
   if (part === "catIcons" || !part) localStorage.setItem(LS_KEYS.catIcons, JSON.stringify(state.catIcons));
+  if (part === "recurring" || !part) localStorage.setItem(LS_KEYS.recurring, JSON.stringify(state.recurring));
 }
 
 /* ---------- Dérivées ---------- */
@@ -300,12 +303,56 @@ function animateCounts() {
 
 // Construit l'onglet "Transactions" : liste du mois affiché, bouton import CSV, détection de doublons,
 // et chaque ligne (data-edit-id) est cliquable pour ouvrir la fiche d'édition (voir attachViewHandlers)
+// État de la recherche/filtre de l'onglet Transactions. Volontairement en dehors de "state" (donc pas sauvegardé) :
+// c'est un réglage temporaire d'affichage, pas une donnée à conserver d'une session à l'autre.
+let txFilterState = { query: "", allMonths: false };
+
+// Renvoie les transactions à afficher compte tenu du filtre actuel (recherche texte + mois courant ou tous les mois),
+// triées de la plus récente à la plus ancienne.
+function getFilteredTx() {
+  const q = txFilterState.query.toLowerCase().trim();
+  let list = txFilterState.allMonths ? state.tx.slice() : getMonthTx();
+  if (q) list = list.filter((t) => (t.description || "").toLowerCase().includes(q) || (t.categorie || "").toLowerCase().includes(q));
+  return list.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// Construit uniquement le HTML des lignes de la liste (pas le reste de l'onglet), pour pouvoir la rafraîchir
+// seule à chaque frappe dans la recherche sans perdre le focus du champ (voir updateTxList)
+function renderTxRowsHTML() {
+  const list = getFilteredTx();
+  if (list.length === 0) {
+    return `<div class="empty">${txFilterState.query ? "Aucune transaction ne correspond à ta recherche." : "Aucune transaction ce mois-ci. Ajoute-en une pour commencer."}</div>`;
+  }
+  return list.map((t) => `
+    <div class="tx-row" data-edit-id="${t.id}">
+      <div class="tx-left">
+        <span class="tx-icon" style="background:${hashColor(t.categorie)}22;">${categoryIcon(t.categorie)}</span>
+        <div style="min-width:0;">
+          <div class="tx-desc">${esc(t.description) || esc(t.categorie)}</div>
+          <div class="tx-meta"><span>${new Date(t.date).toLocaleDateString("fr-FR")}</span>${txFilterState.allMonths ? `<span>${esc(monthLabel(monthKey(t.date)))}</span>` : ""}<span>${esc(t.categorie)}</span></div>
+        </div>
+      </div>
+      <div class="tx-right">
+        <span class="tx-amount ${t.type === "revenu" ? "rev" : ""}">${t.type === "revenu" ? "+" : "−"}${fmtEUR(t.montant)}</span>
+        <button class="tx-del" data-del="${t.id}">✕</button>
+      </div>
+    </div>
+  `).join("");
+}
+// Rafraîchit uniquement la liste des transactions (appelée à chaque frappe dans la recherche, ou au changement
+// du filtre "tous les mois"), sans reconstruire toute la page — ça évite de perdre le focus du champ de recherche.
+function updateTxList() {
+  const inner = document.getElementById("txListInner");
+  if (!inner) return;
+  inner.innerHTML = renderTxRowsHTML();
+  attachTxRowHandlers();
+}
+
 function renderTransactions() {
-  const mtx = getMonthTx().slice().sort((a, b) => b.date.localeCompare(a.date));
   const dupCount = countDuplicates();
   return `
     <div class="tx-toolbar">
-      <h2 class="section-title" style="margin:0;">Transactions du mois</h2>
+      <h2 class="section-title" style="margin:0;">Transactions</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <input type="file" id="csvInput" accept=".csv,.txt" style="display:none;" />
         <button class="btn btn-outline" id="importBtn">⇧ Importer un CSV</button>
@@ -319,25 +366,13 @@ function renderTransactions() {
     </div>` : ""}
     <div id="importErrorBox"></div>
     <p class="hint">Import automatique reconnu : export <strong>Crédit Agricole</strong> (Date, Libellé, Débit euros, Crédit euros) — catégorisation auto, doublons ignorés automatiquement. Ou format générique : <span class="font-mono">date, montant, description, categorie, type</span>.</p>
+    <div class="tx-filter-bar">
+      <input type="text" id="txSearch" class="tx-search" placeholder="🔍 Rechercher (description ou catégorie)" autocomplete="off" value="${esc(txFilterState.query)}" />
+      <label class="tx-filter-toggle"><input type="checkbox" id="txAllMonths" ${txFilterState.allMonths ? "checked" : ""} /> Tous les mois</label>
+    </div>
     <div class="card">
       <div class="receipt-edge"></div>
-      <div class="tx-list">
-        ${mtx.length === 0 ? `<div class="empty">Aucune transaction ce mois-ci. Ajoute-en une pour commencer.</div>` : mtx.map((t) => `
-          <div class="tx-row" data-edit-id="${t.id}">
-            <div class="tx-left">
-              <span class="tx-icon" style="background:${hashColor(t.categorie)}22;">${categoryIcon(t.categorie)}</span>
-              <div style="min-width:0;">
-                <div class="tx-desc">${esc(t.description) || esc(t.categorie)}</div>
-                <div class="tx-meta"><span>${new Date(t.date).toLocaleDateString("fr-FR")}</span><span>${esc(t.categorie)}</span></div>
-              </div>
-            </div>
-            <div class="tx-right">
-              <span class="tx-amount ${t.type === "revenu" ? "rev" : ""}">${t.type === "revenu" ? "+" : "−"}${fmtEUR(t.montant)}</span>
-              <button class="tx-del" data-del="${t.id}">✕</button>
-            </div>
-          </div>
-        `).join("")}
-      </div>
+      <div class="tx-list" id="txListInner">${renderTxRowsHTML()}</div>
       <div class="receipt-edge bottom"></div>
     </div>
   `;
@@ -351,6 +386,41 @@ function removeCategory(type, cat) {
   state.cats[type] = state.cats[type].filter((c) => c !== cat);
   Object.keys(state.budgets).forEach((mk) => { if (state.budgets[mk]?.[type]) delete state.budgets[mk][type][cat]; });
   persist("cats"); persist("budgets");
+}
+
+/* ---------- Transactions récurrentes ---------- */
+// Crée automatiquement, pour chaque règle récurrente (loyer, abonnement, salaire...), la transaction du mois
+// calendaire réel actuel — mais une seule fois par mois : on retient dans "dernierMoisApplique" le dernier mois
+// déjà généré pour cette règle, pour ne jamais la dupliquer même si l'appli est ouverte plusieurs fois dans le mois.
+function applyRecurringTransactions() {
+  if (!state.recurring.length) return;
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  let changed = false;
+  state.recurring.forEach((r) => {
+    if (r.dernierMoisApplique === currentMonthKey) return;
+    // On borne le jour à 28 pour que la règle marche aussi pour les mois courts (février)
+    const jour = Math.min(Math.max(parseInt(r.jour, 10) || 1, 1), 28);
+    const date = `${currentMonthKey}-${String(jour).padStart(2, "0")}`;
+    state.tx.push({ id: uid(), type: r.type, date, montant: Number(r.montant) || 0, description: r.description || "", categorie: r.categorie || "autres" });
+    r.dernierMoisApplique = currentMonthKey;
+    changed = true;
+  });
+  if (changed) persist(); // enregistre à la fois les nouvelles transactions et la mise à jour des règles récurrentes
+}
+
+// Calcule, pour chaque catégorie de dépense, le total réel dépensé mois par mois, sur les N derniers mois
+// où il existe au moins une transaction — pour les comparer côte à côte dans un tableau (onglet Budget prévu).
+function getMonthlyComparison(monthsBack = 6) {
+  const allMonths = [...new Set(state.tx.map((t) => monthKey(t.date)))].sort();
+  const months = allMonths.slice(-monthsBack);
+  const cats = [...new Set(state.tx.filter((t) => t.type === "depense").map((t) => t.categorie))].sort();
+  const table = cats.map((cat) => ({
+    cat,
+    values: months.map((mk) => state.tx.filter((t) => t.type === "depense" && t.categorie === cat && monthKey(t.date) === mk).reduce((s, t) => s + t.montant, 0)),
+  }));
+  const totals = months.map((mk, i) => table.reduce((s, row) => s + row.values[i], 0));
+  return { months, table, totals };
 }
 
 // Construit l'onglet "Budget prévu" : deux colonnes (dépenses/revenus) où on saisit le montant prévu par catégorie,
@@ -368,6 +438,9 @@ function renderBudget() {
       </div>
       <button type="button" class="cat-del-btn" data-cat-del="${type}|${esc(cat)}" title="Supprimer cette catégorie">✕</button>
     </div>`).join("");
+
+  const cmp = getMonthlyComparison(6);
+
   return `
     <div class="grid-2" style="margin-top:0;">
       <div class="card card-pad">
@@ -380,6 +453,50 @@ function renderBudget() {
       </div>
     </div>
     <p class="hint" style="margin-top:14px;">Astuce : tape sur l'icône d'une catégorie pour la changer, ou sur ✕ pour la supprimer (les transactions déjà enregistrées avec cette catégorie ne sont pas touchées).</p>
+
+    <div class="card card-pad" style="margin-top:20px;">
+      <h3 class="section-title">Comparaison sur plusieurs mois</h3>
+      ${cmp.months.length < 2 ? `<div class="empty">Pas encore assez de mois différents dans tes transactions pour comparer.</div>` : `
+      <div class="cmp-table-wrap">
+        <table class="cmp-table">
+          <thead><tr><th>Catégorie</th>${cmp.months.map((mk) => `<th>${esc(monthLabel(mk).slice(0, 3))}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${cmp.table.map((row) => `<tr><td>${categoryIcon(row.cat)} ${esc(row.cat)}</td>${row.values.map((v) => `<td class="font-mono">${v > 0 ? fmtEUR(v).replace(",00", "") : "—"}</td>`).join("")}</tr>`).join("")}
+            <tr class="cmp-total-row"><td>Total</td>${cmp.totals.map((v) => `<td class="font-mono">${fmtEUR(v).replace(",00", "")}</td>`).join("")}</tr>
+          </tbody>
+        </table>
+      </div>`}
+    </div>
+
+    <div class="card card-pad" style="margin-top:20px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <h3 class="section-title" style="margin:0;">Transactions récurrentes</h3>
+        <button type="button" class="btn btn-outline" id="addRecurringBtn">+ Ajouter</button>
+      </div>
+      <p class="hint" style="margin:6px 0 14px;">Une transaction (loyer, abonnement, salaire...) qui se recrée automatiquement chaque mois, au jour indiqué.</p>
+      ${state.recurring.length === 0 ? `<div class="empty">Aucune transaction récurrente.</div>` : state.recurring.map((r) => `
+        <div class="recurring-item" data-recurring-id="${r.id}">
+          <div class="recurring-item-row">
+            <select data-rec-field="type" class="rec-select">
+              <option value="depense" ${r.type === "depense" ? "selected" : ""}>Dépense</option>
+              <option value="revenu" ${r.type === "revenu" ? "selected" : ""}>Revenu</option>
+            </select>
+            <button type="button" class="tx-del" data-rec-del="${r.id}">✕</button>
+          </div>
+          <input type="text" data-rec-field="description" class="rec-input" placeholder="Nom (ex : Loyer)" value="${esc(r.description || "")}" />
+          <div class="recurring-item-row">
+            <select data-rec-field="categorie" class="rec-select">
+              ${(r.type === "depense" ? state.cats.depenses : state.cats.revenus).map((c) => `<option value="${esc(c)}" ${c === r.categorie ? "selected" : ""}>${esc(c)}</option>`).join("")}
+            </select>
+            <div class="budget-input-wrap"><input type="number" step="0.01" data-rec-field="montant" value="${r.montant ?? ""}" placeholder="0" /><span style="color:var(--ink40)">€</span></div>
+          </div>
+          <div class="recurring-item-row">
+            <span class="hint" style="margin:0;">Chaque mois, le jour</span>
+            <input type="number" min="1" max="28" data-rec-field="jour" value="${r.jour ?? 1}" style="width:60px;text-align:center;padding:6px;border-radius:8px;border:1px solid var(--line-strong);background:var(--paper-dim);" />
+          </div>
+        </div>
+      `).join("")}
+    </div>
   `;
 }
 
@@ -492,7 +609,7 @@ function exportData() {
   const payload = {
     _app: "le-carnet", _version: 1, _exportedAt: new Date().toISOString(),
     tx: state.tx, budgets: state.budgets, cats: state.cats, assets: state.assets,
-    settings: state.settings, catIcons: state.catIcons,
+    settings: state.settings, catIcons: state.catIcons, recurring: state.recurring,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -500,6 +617,33 @@ function exportData() {
   const date = new Date().toISOString().slice(0, 10);
   a.href = url;
   a.download = `le-carnet-sauvegarde-${date}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Exporte toutes les transactions dans un fichier .csv lisible directement dans Excel/Google Sheets
+// (séparateur ";" et virgule décimale, comme les exports bancaires français ; un BOM UTF-8 est ajouté
+// en tête de fichier pour qu'Excel affiche correctement les accents).
+function exportCSV() {
+  // Met une valeur entre guillemets si elle contient le séparateur, un guillemet ou un retour à la ligne (règle CSV standard)
+  const csvField = (v) => {
+    const s = String(v ?? "");
+    return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const rows = [["date", "type", "montant", "description", "categorie"]];
+  [...state.tx].sort((a, b) => a.date.localeCompare(b.date)).forEach((t) => {
+    const montantFr = Number(t.montant).toFixed(2).replace(".", ",");
+    rows.push([t.date, t.type, montantFr, t.description || "", t.categorie]);
+  });
+  const csv = rows.map((r) => r.map(csvField).join(";")).join("\r\n");
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `le-carnet-transactions-${date}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -525,6 +669,7 @@ function importDataFile(file) {
     state.assets = data.assets || [];
     state.settings = { ...state.settings, ...(data.settings || {}) };
     state.catIcons = data.catIcons || {};
+    state.recurring = data.recurring || [];
     persist();
     render();
     alert("Sauvegarde importée avec succès.");
@@ -533,18 +678,30 @@ function importDataFile(file) {
 }
 
 /* ---------- Handlers de vue ---------- */
-function attachViewHandlers() {
-  // Supprimer une transaction (bouton ✕ sur une ligne) — stopPropagation pour ne pas déclencher l'ouverture de la fiche d'édition
+// Câble le clic sur ✕ (supprimer) et sur la ligne (éditer) pour toutes les lignes de transaction affichées.
+// Fonction séparée de attachViewHandlers() pour pouvoir la relancer seule quand seule la liste est rafraîchie
+// (recherche/filtre dans l'onglet Transactions), sans reconstruire tout le reste de l'écran.
+function attachTxRowHandlers() {
   document.querySelectorAll("[data-del]").forEach((btn) => {
     btn.onclick = (e) => { e.stopPropagation(); state.tx = state.tx.filter((t) => t.id !== btn.dataset.del); persist("tx"); render(); };
   });
-  // Ouvrir la fiche d'édition en tapant n'importe où sur une ligne de transaction
   document.querySelectorAll("[data-edit-id]").forEach((row) => {
     row.onclick = () => {
       const t = state.tx.find((x) => x.id === row.dataset.editId);
       if (t) openTxModal(t);
     };
   });
+}
+
+function attachViewHandlers() {
+  // Supprimer / éditer une transaction (voir attachTxRowHandlers ci-dessous, réutilisée aussi quand on filtre la liste)
+  attachTxRowHandlers();
+  // Barre de recherche/filtre des transactions : à chaque frappe ou changement de case, on met à jour txFilterState
+  // puis on redessine seulement la liste (updateTxList), pas toute la page, pour ne pas perdre le focus du champ.
+  const txSearchInput = document.getElementById("txSearch");
+  if (txSearchInput) txSearchInput.oninput = () => { txFilterState.query = txSearchInput.value; updateTxList(); };
+  const txAllMonthsInput = document.getElementById("txAllMonths");
+  if (txAllMonthsInput) txAllMonthsInput.onchange = () => { txFilterState.allMonths = txAllMonthsInput.checked; updateTxList(); };
   // Supprimer une catégorie (bouton ✕ à côté d'une catégorie dans l'onglet Budget prévu)
   document.querySelectorAll("[data-cat-del]").forEach((btn) => {
     btn.onclick = () => {
@@ -625,6 +782,32 @@ function attachViewHandlers() {
   });
   document.querySelectorAll("[data-asset-del]").forEach((btn) => {
     btn.onclick = () => { state.assets = state.assets.filter((a) => a.id !== btn.dataset.assetDel); persist("assets"); render(); };
+  });
+
+  // Transactions récurrentes (onglet Budget prévu) : ajout, modification des champs, suppression
+  const addRecurringBtn = document.getElementById("addRecurringBtn");
+  if (addRecurringBtn) addRecurringBtn.onclick = () => {
+    state.recurring.push({ id: uid(), type: "depense", description: "", categorie: state.cats.depenses[0] || "autres", montant: 0, jour: 1, dernierMoisApplique: null });
+    persist("recurring");
+    render();
+  };
+  document.querySelectorAll("[data-recurring-id]").forEach((item) => {
+    const rule = state.recurring.find((r) => r.id === item.dataset.recurringId);
+    if (!rule) return;
+    item.querySelectorAll("[data-rec-field]").forEach((input) => {
+      input.onchange = () => {
+        const field = input.dataset.recField;
+        if (field === "montant") rule.montant = parseFloat(input.value) || 0;
+        else if (field === "jour") rule.jour = Math.min(28, Math.max(1, parseInt(input.value, 10) || 1));
+        else rule[field] = input.value;
+        persist("recurring");
+        // Si le type change, la liste de catégories proposées change aussi -> on redessine tout l'onglet
+        if (field === "type") render();
+      };
+    });
+  });
+  document.querySelectorAll("[data-rec-del]").forEach((btn) => {
+    btn.onclick = () => { state.recurring = state.recurring.filter((r) => r.id !== btn.dataset.recDel); persist("recurring"); render(); };
   });
 }
 
@@ -996,10 +1179,15 @@ function openSettingsModal() {
         <h3 class="section-title">Sauvegarde</h3>
         <p class="hint" style="margin:0 0 14px;">Tes données restent uniquement sur cet appareil. Pour les retrouver sur un autre téléphone ou un PC, exporte un fichier de sauvegarde ici, transfère-le (mail, drive, clé USB...), puis importe-le sur l'autre appareil.</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-outline" id="exportDataBtn">⬇ Exporter mes données</button>
+          <button type="button" class="btn btn-outline" id="exportDataBtn">⬇ Exporter mes données (.json)</button>
+          <button type="button" class="btn btn-outline" id="exportCSVBtn">⬇ Exporter en CSV (Excel)</button>
           <button type="button" class="btn btn-outline" id="importDataBtn">⬆ Importer une sauvegarde</button>
           <input type="file" id="importDataFile" accept="application/json" style="display:none;" />
         </div>
+
+        <h3 class="section-title" style="margin-top:20px;">Verrouillage</h3>
+        <p class="hint" style="margin:0 0 14px;">${localStorage.getItem(LS_KEYS.pin) ? "Un code PIN est actuellement demandé à l'ouverture de l'appli." : "Aucun code demandé à l'ouverture. Utile si quelqu'un d'autre peut avoir accès à cet appareil."}</p>
+        <button type="button" class="btn btn-outline" id="pinToggleBtn" style="width:100%;justify-content:center;">${localStorage.getItem(LS_KEYS.pin) ? "🔓 Désactiver le code PIN" : "🔒 Activer un code PIN (4 chiffres)"}</button>
       </div>
     </div>
   `;
@@ -1007,6 +1195,26 @@ function openSettingsModal() {
   document.getElementById("closeSettings").onclick = () => (root.innerHTML = "");
   document.getElementById("replayTutoBtn").onclick = () => { root.innerHTML = ""; showOnboarding(); };
   document.getElementById("exportDataBtn").onclick = () => exportData();
+  document.getElementById("exportCSVBtn").onclick = () => exportCSV();
+  document.getElementById("pinToggleBtn").onclick = () => {
+    if (localStorage.getItem(LS_KEYS.pin)) {
+      const saisi = prompt("Entre ton code PIN actuel pour désactiver le verrouillage :");
+      if (saisi === null) return;
+      if (saisi.trim() !== localStorage.getItem(LS_KEYS.pin)) { alert("Code incorrect."); return; }
+      localStorage.removeItem(LS_KEYS.pin);
+      alert("Verrouillage désactivé.");
+    } else {
+      const p1 = prompt("Choisis un code PIN à 4 chiffres :");
+      if (p1 === null) return;
+      if (!/^\d{4}$/.test(p1.trim())) { alert("Le code doit contenir exactement 4 chiffres."); return; }
+      const p2 = prompt("Confirme le code PIN :");
+      if (p2 === null) return;
+      if (p2.trim() !== p1.trim()) { alert("Les deux codes ne correspondent pas."); return; }
+      localStorage.setItem(LS_KEYS.pin, p1.trim());
+      alert("Verrouillage activé — le code sera demandé au prochain lancement de l'appli.");
+    }
+    openSettingsModal(); // redessine la fenêtre pour mettre à jour le texte/bouton selon le nouvel état
+  };
   const importDataBtn = document.getElementById("importDataBtn");
   const importDataFileInput = document.getElementById("importDataFile");
   importDataBtn.onclick = () => importDataFileInput.click();
@@ -1079,10 +1287,50 @@ function closeOnboarding() {
   localStorage.setItem(LS_KEYS.onboarded, "1");
 }
 
+/* ---------- Verrouillage par code PIN ---------- */
+// Au démarrage : si un PIN a été configuré (voir openSettingsModal), on bloque l'accès derrière un écran de saisie
+// avant de démarrer l'appli. C'est juste un frein d'accès simple (pas un vrai chiffrement) — largement suffisant
+// pour empêcher un regard indiscret sur un téléphone partagé ou égaré, mais pas une protection cryptographique.
+function checkPinLock() {
+  const pin = localStorage.getItem(LS_KEYS.pin);
+  if (!pin) { bootApp(); return; }
+  document.getElementById("lockRoot").innerHTML = `
+    <div class="onboarding-backdrop">
+      <div class="onboarding-card">
+        <div class="onboarding-icon">🔒</div>
+        <h3 class="onboarding-title">Appli verrouillée</h3>
+        <p class="onboarding-text">Entre ton code PIN pour continuer.</p>
+        <input type="password" inputmode="numeric" maxlength="4" id="lockInput" class="lock-input" autofocus />
+        <div id="lockError" class="lock-error"></div>
+        <button type="button" class="btn btn-solid" id="lockSubmit" style="width:100%;justify-content:center;margin-top:14px;">Déverrouiller</button>
+      </div>
+    </div>
+  `;
+  const input = document.getElementById("lockInput");
+  const tryUnlock = () => {
+    if (input.value.trim() === pin) {
+      document.getElementById("lockRoot").innerHTML = "";
+      bootApp();
+    } else {
+      document.getElementById("lockError").textContent = "Code incorrect, réessaie.";
+      input.value = "";
+      input.focus();
+    }
+  };
+  document.getElementById("lockSubmit").onclick = tryUnlock;
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") tryUnlock(); });
+  input.focus();
+}
+
 /* ---------- Init ---------- */
 function init() {
   loadState();
   document.getElementById("loading").style.display = "none";
+  checkPinLock();
+}
+
+// Démarrage effectif de l'appli (après un éventuel déverrouillage par PIN, ou immédiatement s'il n'y en a pas)
+function bootApp() {
   document.getElementById("app").style.display = "block";
 
   document.getElementById("prevMonth").onclick = () => shiftMonth(-1);
@@ -1090,6 +1338,9 @@ function init() {
   document.getElementById("settingsBtn").onclick = () => openSettingsModal();
   document.querySelectorAll("#tabs button").forEach((b) => { b.onclick = () => { state.tab = b.dataset.tab; render(); }; });
   document.getElementById("fabAdd").onclick = () => openTxModal(null);
+
+  // Crée automatiquement les transactions du mois si des règles récurrentes sont configurées (voir plus haut)
+  applyRecurringTransactions();
 
   render();
 
