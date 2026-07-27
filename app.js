@@ -44,7 +44,17 @@ const fmtEUR = (n) => (Number(n) || 0).toLocaleString("fr-FR", { style: "currenc
 const monthKey = (d) => d.slice(0, 7);
 const monthLabel = (key) => { const [y, m] = key.split("-").map(Number); return `${MOIS_FR[m - 1]} ${y}`; };
 const uid = () => Math.random().toString(36).slice(2, 10);
-const hashColor = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = s.charCodeAt(i) + ((h << 5) - h); return PALETTE[Math.abs(h) % PALETTE.length]; };
+// Attribue une couleur à chaque catégorie. Avant : un hash du nom -> avec seulement 10 couleurs dans la palette et
+// une dizaine de catégories, deux noms différents tombaient souvent sur la même couleur par pur hasard (ex : "autres"
+// et "groupama" pouvaient être identiques). Maintenant : la couleur dépend du RANG de la catégorie dans la liste
+// alphabétique de toutes les catégories connues (dépenses + revenus confondues) -> tant qu'il y a 10 catégories ou
+// moins (la taille de PALETTE), chacune a une couleur garantie différente de ses voisines.
+const hashColor = (s) => {
+  const allCats = [...new Set([...(state.cats?.depenses || []), ...(state.cats?.revenus || [])])].sort();
+  let idx = allCats.indexOf(s);
+  if (idx === -1) { let h = 0; for (let i = 0; i < s.length; i++) h = s.charCodeAt(i) + ((h << 5) - h); idx = Math.abs(h); } // catégorie inconnue/supprimée : on retombe sur un hash
+  return PALETTE[idx % PALETTE.length];
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ---------- Stockage local ---------- */
@@ -154,13 +164,17 @@ function renderDashboard() {
   }).sort((a, b) => b.reel - a.reel);
 
   // Construit le donut de répartition avec un dégradé conique CSS : chaque catégorie occupe une portion
-  // du cercle proportionnelle à son montant, en cumulant les angles de départ/fin (acc = angle cumulé)
+  // du cercle proportionnelle à son montant, en cumulant les angles de départ/fin (acc = angle cumulé).
+  // On insère aussi un petit espace (couleur de fond) juste avant chaque part suivante : ça crée une frontière
+  // nette entre les parts, visible même dans le cas où deux couleurs se ressembleraient.
   const pieData = Object.entries(totals.depReel);
   let gradient = "", acc = 0;
   const total = pieData.reduce((s, [, v]) => s + v, 0) || 1;
+  const gapDeg = pieData.length > 1 ? 1.5 : 0;
   pieData.forEach(([name, v]) => {
     const start = (acc / total) * 360; acc += v; const end = (acc / total) * 360;
-    gradient += `${hashColor(name)} ${start}deg ${end}deg, `;
+    const cut = Math.max(start, end - gapDeg);
+    gradient += `${hashColor(name)} ${start}deg ${cut}deg, var(--surface-2) ${cut}deg ${end}deg, `;
   });
   gradient = gradient ? gradient.slice(0, -2) : "var(--paper-dim) 0deg 360deg";
 
