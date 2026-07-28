@@ -7,10 +7,6 @@ const DEFAULT_CATS = {
   revenus: ["salaire", "caf", "maman", "cpam", "wtw", "mamy"],
 };
 const MOIS_FR = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
-// Couleurs utilisées pour colorer automatiquement les catégories. Générées à intervalles réguliers sur la roue
-// chromatique (12 teintes espacées de 30°, dans un ordre entrelacé) plutôt que choisies à l'œil, pour garantir
-// que deux catégories voisines dans la liste (voir hashColor) aient toujours des couleurs bien distinctes.
-const PALETTE = ["#DA6262","#62DADA","#9EDA62","#9E62DA","#DA9E62","#629EDA","#62DA62","#DA62DA","#DADA62","#6262DA","#62DA9E","#DA629E"];
 // Emoji par défaut pour chaque catégorie connue. L'utilisateur peut les remplacer (voir state.catIcons ci-dessous).
 const CATEGORY_ICONS = {
   courses: "🛒", loisirs: "🎉", voiture: "🚗", gasoil: "⛽", salle: "🏋️", cadeaux: "🎁",
@@ -32,7 +28,7 @@ function categoryIcon(cat) {
 let state = {
   tx: [], // liste de toutes les transactions : {id, type: "depense"|"revenu", date, montant, description, categorie}
   budgets: {}, // budget prévu par mois : { "2026-07": { depenses: {courses: 250, ...}, revenus: {...} } }
-  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "" }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible)
+  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "", theme: "dark" }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible, thème clair/sombre)
   cats: JSON.parse(JSON.stringify(DEFAULT_CATS)), // liste des catégories existantes (copie pour ne pas modifier DEFAULT_CATS par erreur)
   catIcons: {}, // surcharge des icônes par catégorie choisie par l'utilisateur : { "courses": "🥖" }
   assets: [], // comptes/livrets/investissements saisis manuellement : {id, nom, montant}
@@ -51,14 +47,27 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 // et "groupama" pouvaient être identiques). Maintenant : la couleur dépend du RANG de la catégorie dans la liste
 // alphabétique de toutes les catégories connues (dépenses + revenus confondues) -> tant qu'il y a 10 catégories ou
 // moins (la taille de PALETTE), chacune a une couleur garantie différente de ses voisines.
-const hashColor = (s) => {
+// Attribue une couleur à chaque catégorie. Au lieu d'une palette figée à N couleurs (qui finit par répéter des
+// teintes proches si on ajoute plus de catégories que la palette n'a de couleurs), on génère la teinte directement :
+// chaque catégorie avance de 137,5° sur la roue chromatique (l'« angle d'or ») par rapport à la précédente, dans
+// l'ordre alphabétique de toutes les catégories connues. C'est la méthode classique pour répartir un nombre
+// illimité de couleurs de façon à ce qu'elles restent toujours bien distinctes les unes des autres, même juste
+// à côté : contrairement à une simple répartition régulière (360°/N), l'angle d'or évite que la Nème couleur
+// ajoutée retombe près d'une couleur déjà utilisée.
+// Calcule la teinte (0-360°) attribuée à une catégorie, par angle d'or (voir explication ci-dessus)
+function categoryHue(s) {
   const dep = (state.cats && state.cats.depenses) || [];
   const rev = (state.cats && state.cats.revenus) || [];
   const allCats = [...new Set([...dep, ...rev])].sort();
   let idx = allCats.indexOf(s);
   if (idx === -1) { let h = 0; for (let i = 0; i < s.length; i++) h = s.charCodeAt(i) + ((h << 5) - h); idx = Math.abs(h); } // catégorie inconnue/supprimée : on retombe sur un hash
-  return PALETTE[idx % PALETTE.length];
-};
+  return (idx * 137.508) % 360;
+}
+const hashColor = (s) => `hsl(${categoryHue(s).toFixed(1)}, 68%, 58%)`;
+// Même couleur que hashColor mais avec une transparence réglable (0 à 1) — utilisée pour les fonds discrets
+// (ex : pastille d'icône de transaction), là où avant on collait "22" derrière un hex (astuce qui ne marche
+// plus depuis qu'on génère des couleurs en hsl() et non plus en hexadécimal).
+const hashColorAlpha = (s, a) => `hsla(${categoryHue(s).toFixed(1)}, 68%, 58%, ${a})`;
 const esc = (s) => String(s === undefined || s === null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ---------- Stockage local ---------- */
@@ -87,6 +96,40 @@ function persist(part) {
   if (part === "assets" || !part) localStorage.setItem(LS_KEYS.assets, JSON.stringify(state.assets));
   if (part === "catIcons" || !part) localStorage.setItem(LS_KEYS.catIcons, JSON.stringify(state.catIcons));
   if (part === "recurring" || !part) localStorage.setItem(LS_KEYS.recurring, JSON.stringify(state.recurring));
+}
+
+// Applique le thème (clair/sombre) choisi dans les réglages : pose l'attribut data-theme sur <html>, ce qui
+// bascule toutes les variables CSS définies dans style.css (voir html[data-theme="light"] { ... }).
+// Met aussi à jour la couleur de la barre de statut du téléphone (meta theme-color) pour rester cohérent.
+function applyTheme() {
+  const light = state.settings.theme === "light";
+  document.documentElement.setAttribute("data-theme", light ? "light" : "dark");
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", light ? "#F5F6F9" : "#0A0E14");
+}
+
+// Petite vibration (retour haptique) à la validation d'une transaction, si le téléphone le supporte.
+// Ne fait rien sur PC ou sur un navigateur qui ne supporte pas l'API — jamais bloquant.
+function hapticTap() {
+  if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) {} }
+}
+
+// Affiche un petit message temporaire en bas de l'écran (ex : "✓ Transaction enregistrée"), qui apparaît en
+// douceur puis disparaît tout seul après 2,2 secondes. L'élément est créé une seule fois puis réutilisé.
+let toastTimer = null;
+function showToast(message) {
+  let el = document.getElementById("toastRoot");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toastRoot";
+    el.className = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  void el.offsetWidth; // force le navigateur à "lire" l'état avant d'ajouter .show, sinon la transition ne se rejoue pas si le toast était déjà affiché juste avant
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
 }
 
 /* ---------- Dérivées ---------- */
@@ -167,20 +210,24 @@ function renderDashboard() {
     return { cat, prevu, reel };
   }).sort((a, b) => b.reel - a.reel);
 
-  // Construit le donut de répartition avec un dégradé conique CSS : chaque catégorie occupe une portion
-  // du cercle proportionnelle à son montant, en cumulant les angles de départ/fin (acc = angle cumulé).
-  // On insère aussi un petit espace (couleur de fond) juste avant chaque part suivante : ça crée une frontière
-  // nette entre les parts, visible même dans le cas où deux couleurs se ressembleraient.
-  const pieData = Object.entries(totals.depReel);
-  let gradient = "", acc = 0;
+  // Construit le donut de répartition en SVG (et non plus en dégradé CSS) : chaque catégorie est un arc de cercle
+  // séparé, ce qui permet 1) de le rendre cliquable (voir attachViewHandlers → clic sur .pie-seg) et
+  // 2) de connaître le pourcentage exact de chaque part. Technique : un <circle> plein avec seulement une partie
+  // de son contour dessinée (stroke-dasharray), qu'on "avance" avec stroke-dashoffset pour positionner chaque part
+  // après la précédente. rotate(-90deg) sur le groupe fait juste démarrer la première part en haut (comme une horloge).
+  const pieData = Object.entries(totals.depReel).sort((a, b) => b[1] - a[1]);
   const total = pieData.reduce((s, [, v]) => s + v, 0) || 1;
-  const gapDeg = pieData.length > 1 ? 1.5 : 0;
-  pieData.forEach(([name, v]) => {
-    const start = (acc / total) * 360; acc += v; const end = (acc / total) * 360;
-    const cut = Math.max(start, end - gapDeg);
-    gradient += `${hashColor(name)} ${start}deg ${cut}deg, var(--surface-2) ${cut}deg ${end}deg, `;
-  });
-  gradient = gradient ? gradient.slice(0, -2) : "var(--paper-dim) 0deg 360deg";
+  const R = 38, CIRC = 2 * Math.PI * R;
+  const gapLen = pieData.length > 1 ? CIRC * 0.01 : 0; // petit espace entre les parts, pour une frontière nette même entre deux couleurs proches
+  let accLen = 0;
+  const pieSegs = pieData.map(([name, v]) => {
+    const segLen = (v / total) * CIRC;
+    const dash = Math.max(0, segLen - gapLen);
+    const offset = -accLen;
+    accLen += segLen;
+    const pct = Math.round((v / total) * 100);
+    return `<circle class="pie-seg" data-cat="${esc(name)}" data-amount="${v}" data-pct="${pct}" cx="50" cy="50" r="${R}" fill="none" stroke="${hashColor(name)}" stroke-width="16" stroke-dasharray="${dash.toFixed(2)} ${(CIRC - dash).toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}" />`;
+  }).join("");
 
   // Petite courbe (sparkline) des 6 derniers mois affichée dans le bandeau du haut
   const spark = getYearlySeries().slice(-6);
@@ -230,11 +277,16 @@ function renderDashboard() {
         ${pieData.length === 0 ? `<div class="empty">Rien à afficher pour ce mois.</div>` : `
         <div class="donut-wrap">
           <div class="donut-pos">
-            <div class="donut" style="background:conic-gradient(${gradient})"></div>
-            <div class="donut-center"><div class="amt">${fmtEUR(total).replace(",00", "")}</div><div class="lbl">total</div></div>
+            <svg class="donut-svg" viewBox="0 0 100 100" id="pieSvg"><g transform="rotate(-90 50 50)">${pieSegs}</g></svg>
+            <!-- Le centre affiche le total par défaut ; un clic sur une part (voir attachViewHandlers) le remplace
+                 par le détail de la catégorie choisie, et data-pie-reset ramène au total. -->
+            <div class="donut-center" id="pieCenter" data-pie-reset>
+              <div class="amt font-mono" id="pieCenterAmt">${fmtEUR(total).replace(",00", "")}</div>
+              <div class="lbl" id="pieCenterLbl">total</div>
+            </div>
           </div>
           <div class="legend">
-            ${pieData.map(([name]) => `<span class="legend-item"><span class="legend-dot" style="background:${hashColor(name)}"></span>${categoryIcon(name)} ${esc(name)}</span>`).join("")}
+            ${pieData.map(([name, v]) => `<span class="legend-item" data-legend-cat="${esc(name)}"><span class="legend-dot" style="background:${hashColor(name)}"></span>${categoryIcon(name)} ${esc(name)} <span class="legend-pct">${Math.round((v / total) * 100)}%</span></span>`).join("")}
           </div>
         </div>`}
       </div>
@@ -344,7 +396,7 @@ function renderTxRowsHTML() {
   return list.map((t) => `
     <div class="tx-row" data-edit-id="${t.id}">
       <div class="tx-left">
-        <span class="tx-icon" style="background:${hashColor(t.categorie)}22;">${categoryIcon(t.categorie)}</span>
+        <span class="tx-icon" style="background:${hashColorAlpha(t.categorie, 0.13)};">${categoryIcon(t.categorie)}</span>
         <div style="min-width:0;">
           <div class="tx-desc">${esc(t.description) || esc(t.categorie)}</div>
           <div class="tx-meta"><span>${new Date(t.date).toLocaleDateString("fr-FR")}</span>${txFilterState.allMonths ? `<span>${esc(monthLabel(monthKey(t.date)))}</span>` : ""}<span>${esc(t.categorie)}</span></div>
@@ -414,7 +466,7 @@ function renderTransactions() {
       </div>
     </div>
     ${dupCount > 0 ? `
-    <div class="hint" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--gold-light);color:#F7DA9A;padding:10px 12px;border-radius:12px;margin-bottom:12px;">
+    <div class="hint" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--gold-light);color:var(--gold);padding:10px 12px;border-radius:12px;margin-bottom:12px;">
       <span>⚠ ${dupCount} doublon(s) potentiel(s) détecté(s) dans tout l'historique (même date, montant et libellé).</span>
       <button class="btn btn-outline" id="cleanDupBtn" style="flex-shrink:0;">Nettoyer</button>
     </div>` : ""}
@@ -645,7 +697,7 @@ function renderAnnee() {
         </div>
         <div class="field">
           <label>Date butoir de l'objectif</label>
-          <div class="date-field-wrap"><input type="month" id="setDateObjectif" value="${state.settings.dateObjectif || ""}" /></div>
+          <div class="date-field-wrap"><div class="date-display" id="setDateObjectifDisplay"></div><input type="month" id="setDateObjectif" class="date-native" value="${state.settings.dateObjectif || ""}" /></div>
         </div>
         <div class="field">
           <label>Solde de départ du compte courant (€)</label>
@@ -726,6 +778,7 @@ function importDataFile(file) {
     state.catIcons = data.catIcons || {};
     state.recurring = data.recurring || [];
     persist();
+    applyTheme();
     render();
     alert("Sauvegarde importée avec succès.");
   };
@@ -748,10 +801,58 @@ function attachTxRowHandlers() {
   });
 }
 
+// Synchronise l'affichage custom (icône + date lisible) d'un champ date/mois avec la valeur du vrai champ natif,
+// invisible mais toujours présent par-dessus (c'est lui qui reçoit le clic et ouvre le sélecteur natif du téléphone).
+// À appeler une première fois après avoir inséré le champ dans le DOM, elle se tient ensuite à jour toute seule.
+function syncDateDisplay(nativeId, displayId, kind) {
+  const native = document.getElementById(nativeId);
+  const display = document.getElementById(displayId);
+  if (!native || !display) return;
+  function paintDisplay() {
+    const v = native.value;
+    let text;
+    if (!v) text = kind === "month" ? "Choisir un mois" : "Choisir une date";
+    else if (kind === "month") text = monthLabel(v);
+    else { const [y, m, d] = v.split("-"); text = `${d}/${m}/${y}`; }
+    display.innerHTML = `<span>${esc(text)}</span><span class="cal-icon"></span>`;
+  }
+  paintDisplay();
+  native.addEventListener("input", paintDisplay);
+  native.addEventListener("change", paintDisplay);
+}
+
 function attachViewHandlers() {
   // Supprimer / éditer une transaction (voir attachTxRowHandlers ci-dessous, réutilisée aussi quand on filtre la liste)
   attachTxRowHandlers();
   attachBulkBarHandlers();
+  // Camembert de répartition (Tableau de bord) : cliquer sur une part OU sur sa légende affiche son nom, son montant
+  // et son pourcentage au centre du donut ; cliquer à nouveau sur le centre revient au total du mois.
+  const pieCenterAmt = document.getElementById("pieCenterAmt");
+  const pieCenterLbl = document.getElementById("pieCenterLbl");
+  function showPieDetail(cat, amount, pct) {
+    if (!pieCenterAmt) return;
+    pieCenterAmt.textContent = fmtEUR(amount);
+    pieCenterLbl.textContent = `${categoryIcon(cat)} ${cat} · ${pct}%`;
+  }
+  function resetPieDetail() {
+    if (!pieCenterAmt) return;
+    const total = document.querySelectorAll(".pie-seg").length
+      ? Array.from(document.querySelectorAll(".pie-seg")).reduce((s, el) => s + Number(el.dataset.amount), 0)
+      : 0;
+    pieCenterAmt.textContent = fmtEUR(total).replace(",00", "");
+    pieCenterLbl.textContent = "total";
+  }
+  document.querySelectorAll(".pie-seg").forEach((seg) => {
+    seg.style.cursor = "pointer";
+    seg.onclick = () => showPieDetail(seg.dataset.cat, Number(seg.dataset.amount), seg.dataset.pct);
+  });
+  document.querySelectorAll("[data-legend-cat]").forEach((item) => {
+    const seg = document.querySelector(`.pie-seg[data-cat="${CSS.escape(item.dataset.legendCat)}"]`);
+    if (!seg) return;
+    item.onclick = () => showPieDetail(seg.dataset.cat, Number(seg.dataset.amount), seg.dataset.pct);
+  });
+  const pieCenter = document.getElementById("pieCenter");
+  if (pieCenter) pieCenter.onclick = resetPieDetail;
   // Barre de recherche/filtre des transactions : à chaque frappe ou changement de case, on met à jour txFilterState
   // puis on redessine seulement la liste (updateTxList), pas toute la page, pour ne pas perdre le focus du champ.
   const txSearchInput = document.getElementById("txSearch");
@@ -812,6 +913,7 @@ function attachViewHandlers() {
   const setObjectif = document.getElementById("setObjectif");
   const setSolde = document.getElementById("setSolde");
   const setDateObjectif = document.getElementById("setDateObjectif");
+  syncDateDisplay("setDateObjectif", "setDateObjectifDisplay", "month");
   if (setObjectif) setObjectif.onchange = () => { state.settings.objectif = parseFloat(setObjectif.value) || 0; persist("settings"); render(); };
   if (setSolde) setSolde.onchange = () => { state.settings.soldeInitial = parseFloat(setSolde.value) || 0; persist("settings"); render(); };
   if (setDateObjectif) setDateObjectif.onchange = () => { state.settings.dateObjectif = setDateObjectif.value || ""; persist("settings"); render(); };
@@ -1136,7 +1238,7 @@ function openTxModal(existing) {
             <button type="button" data-type="revenu" class="${type === "revenu" ? "active-rev" : ""}">Revenu</button>
           </div>
           <div class="field"><label>Montant (€)</label><input type="number" step="0.01" min="0" required id="fMontant" placeholder="0,00" value="${existing ? existing.montant : ""}" /></div>
-          <div class="field"><label>Date</label><div class="date-field-wrap"><input type="date" id="fDate" value="${existing ? existing.date : todayISO}" /></div></div>
+          <div class="field"><label>Date</label><div class="date-field-wrap"><div class="date-display" id="fDateDisplay"></div><input type="date" id="fDate" class="date-native" value="${existing ? existing.date : todayISO}" /></div></div>
           <div class="field"><label>Description (optionnel)</label><input type="text" id="fDesc" placeholder="ex : courses Leclerc" value="${existing ? esc(existing.description || "") : ""}" /></div>
           <div class="field cat-field-wrap">
             <label>Catégorie</label>
@@ -1152,6 +1254,7 @@ function openTxModal(existing) {
     `;
     document.getElementById("backdrop").onclick = (e) => { if (e.target.id === "backdrop") root.innerHTML = ""; };
     document.getElementById("closeModal").onclick = () => (root.innerHTML = "");
+    syncDateDisplay("fDate", "fDateDisplay", "date");
     document.querySelectorAll(".type-switch button").forEach((b) => {
       b.onclick = () => { type = b.dataset.type; paint(); };
     });
@@ -1204,6 +1307,8 @@ function openTxModal(existing) {
       root.innerHTML = "";
       state.month = monthKey(date);
       render();
+      hapticTap();
+      showToast(isEdit ? "✓ Transaction modifiée" : "✓ Transaction enregistrée");
     };
   }
   paint();
@@ -1229,7 +1334,13 @@ function openSettingsModal() {
           <h3>Réglages</h3>
           <button type="button" id="closeSettings">✕</button>
         </div>
-        <h3 class="section-title" style="margin-top:4px;">Tutoriel</h3>
+        <h3 class="section-title" style="margin-top:4px;">Apparence</h3>
+        <div class="type-switch" style="margin-bottom:20px;">
+          <button type="button" data-theme-choice="dark" class="${state.settings.theme !== "light" ? "active-neutral" : ""}">🌙 Sombre</button>
+          <button type="button" data-theme-choice="light" class="${state.settings.theme === "light" ? "active-neutral" : ""}">☀️ Clair</button>
+        </div>
+
+        <h3 class="section-title">Tutoriel</h3>
         <button type="button" class="btn btn-outline" id="replayTutoBtn" style="width:100%;justify-content:center;margin-bottom:20px;">🔎 Revoir le tutoriel de bienvenue</button>
 
         <h3 class="section-title">Sauvegarde</h3>
@@ -1249,6 +1360,14 @@ function openSettingsModal() {
   `;
   document.getElementById("settingsBackdrop").onclick = (e) => { if (e.target.id === "settingsBackdrop") root.innerHTML = ""; };
   document.getElementById("closeSettings").onclick = () => (root.innerHTML = "");
+  document.querySelectorAll("[data-theme-choice]").forEach((btn) => {
+    btn.onclick = () => {
+      state.settings.theme = btn.dataset.themeChoice;
+      persist("settings");
+      applyTheme();
+      openSettingsModal(); // redessine la fenêtre pour mettre à jour le bouton actif
+    };
+  });
   document.getElementById("replayTutoBtn").onclick = () => { root.innerHTML = ""; showOnboarding(); };
   document.getElementById("exportDataBtn").onclick = () => exportData();
   document.getElementById("exportCSVBtn").onclick = () => exportCSV();
@@ -1383,6 +1502,7 @@ function checkPinLock() {
 /* ---------- Init ---------- */
 function init() {
   loadState();
+  applyTheme();
   document.getElementById("loading").style.display = "none";
   checkPinLock();
 }
