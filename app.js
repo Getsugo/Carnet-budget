@@ -218,11 +218,15 @@ function renderDashboard() {
   const pieData = Object.entries(totals.depReel).sort((a, b) => b[1] - a[1]);
   const total = pieData.reduce((s, [, v]) => s + v, 0) || 1;
   const R = 38, CIRC = 2 * Math.PI * R;
-  const gapLen = pieData.length > 1 ? CIRC * 0.01 : 0; // petit espace entre les parts, pour une frontière nette même entre deux couleurs proches
   let accLen = 0;
   const pieSegs = pieData.map(([name, v]) => {
     const segLen = (v / total) * CIRC;
-    const dash = Math.max(0, segLen - gapLen);
+    // Le gap doit rester visuellement net entre deux grosses parts, MAIS ne jamais avaler une petite part :
+    // il est donc plafonné à 20% de la longueur du segment lui-même (au lieu d'une valeur fixe qui, sur une
+    // part de 1%, pouvait consommer la totalité de son arc et la faire disparaître complètement — c'est ce
+    // qui créait un grand vide dans le donut là où une petite catégorie aurait dû apparaître).
+    const gap = pieData.length > 1 ? Math.min(2.2, segLen * 0.2) : 0;
+    const dash = Math.max(0, segLen - gap);
     const offset = -accLen;
     accLen += segLen;
     const pct = Math.round((v / total) * 100);
