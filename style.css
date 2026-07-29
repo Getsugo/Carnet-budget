@@ -23,6 +23,7 @@
   --track: rgba(255,255,255,0.06);        /* piste des barres de progression */
   --hover-overlay: rgba(255,255,255,0.03); /* survol/tap discret sur fond de carte */
   --icon-ring: rgba(255,255,255,0.06);     /* liseré discret autour des pastilles d'icône */
+  --header-bg: rgba(10,14,20,0.72);        /* fond translucide de l'en-tête collant en haut */
 
   --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
   --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
@@ -52,6 +53,7 @@ html[data-theme="light"] {
   --track: rgba(15,20,30,0.08);
   --hover-overlay: rgba(15,20,30,0.04);
   --icon-ring: rgba(15,20,30,0.07);
+  --header-bg: rgba(245,246,249,0.78);
 }
 html[data-theme="light"] { color-scheme: light; }
 
@@ -97,7 +99,7 @@ input:focus, select:focus { outline: none; border-color: var(--sage) !important;
 
 header.app-header {
   position: sticky; top: 0; z-index: 20;
-  background: rgba(10,14,20,0.72); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  background: var(--header-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--line);
 }
 .header-top { display: flex; align-items: center; justify-content: space-between; padding: 14px 0 6px; }
