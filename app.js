@@ -833,24 +833,39 @@ function attachViewHandlers() {
   // et son pourcentage au centre du donut ; cliquer à nouveau sur le centre revient au total du mois.
   const pieCenterAmt = document.getElementById("pieCenterAmt");
   const pieCenterLbl = document.getElementById("pieCenterLbl");
+  const allSegs = document.querySelectorAll(".pie-seg");
+  const allLegendItems = document.querySelectorAll("[data-legend-cat]");
+  // Met en avant la part choisie (plus épaisse, légère ombre) et atténue toutes les autres, pour qu'on
+  // voie immédiatement laquelle est sélectionnée. Fait la même chose sur sa légende associée.
+  function selectPieSlice(cat) {
+    allSegs.forEach((s) => s.classList.toggle("selected", s.dataset.cat === cat));
+    allSegs.forEach((s) => s.classList.toggle("dimmed", s.dataset.cat !== cat));
+    allLegendItems.forEach((it) => it.classList.toggle("selected", it.dataset.legendCat === cat));
+  }
+  function clearPieSelection() {
+    allSegs.forEach((s) => s.classList.remove("selected", "dimmed"));
+    allLegendItems.forEach((it) => it.classList.remove("selected"));
+  }
   function showPieDetail(cat, amount, pct) {
     if (!pieCenterAmt) return;
     pieCenterAmt.textContent = fmtEUR(amount);
     pieCenterLbl.textContent = `${categoryIcon(cat)} ${cat} · ${pct}%`;
+    selectPieSlice(cat);
   }
   function resetPieDetail() {
     if (!pieCenterAmt) return;
-    const total = document.querySelectorAll(".pie-seg").length
-      ? Array.from(document.querySelectorAll(".pie-seg")).reduce((s, el) => s + Number(el.dataset.amount), 0)
+    const total = allSegs.length
+      ? Array.from(allSegs).reduce((s, el) => s + Number(el.dataset.amount), 0)
       : 0;
     pieCenterAmt.textContent = fmtEUR(total).replace(",00", "");
     pieCenterLbl.textContent = "total";
+    clearPieSelection();
   }
-  document.querySelectorAll(".pie-seg").forEach((seg) => {
+  allSegs.forEach((seg) => {
     seg.style.cursor = "pointer";
     seg.onclick = () => showPieDetail(seg.dataset.cat, Number(seg.dataset.amount), seg.dataset.pct);
   });
-  document.querySelectorAll("[data-legend-cat]").forEach((item) => {
+  allLegendItems.forEach((item) => {
     const seg = document.querySelector(`.pie-seg[data-cat="${CSS.escape(item.dataset.legendCat)}"]`);
     if (!seg) return;
     item.onclick = () => showPieDetail(seg.dataset.cat, Number(seg.dataset.amount), seg.dataset.pct);
