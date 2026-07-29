@@ -307,6 +307,17 @@ html[data-theme="light"] .date-display .cal-icon {
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
 
+/* Feu d'artifice de confettis (célébration objectif d'épargne atteint) */
+.confetti-root { position: fixed; inset: 0; pointer-events: none; z-index: 200; overflow: hidden; }
+.confetti-piece {
+  position: absolute; top: -14px; border-radius: 2px; opacity: 0.95;
+  animation-name: confetti-fall; animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94); animation-fill-mode: forwards;
+}
+@keyframes confetti-fall {
+  0% { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+  100% { transform: translate(var(--drift), 108vh) rotate(var(--rot)); opacity: 0; }
+}
+
 .loading-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); color: var(--ink40); background: var(--paper); }
 
 .install-banner { display: none; align-items: center; justify-content: space-between; gap: 10px; background: var(--gold-light); border: 1px solid rgba(240,190,78,0.3); color: var(--gold); font-size: 13px; padding: 10px 14px; border-radius: 14px; margin-bottom: 16px; }

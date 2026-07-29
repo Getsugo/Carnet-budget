@@ -28,7 +28,7 @@ function categoryIcon(cat) {
 let state = {
   tx: [], // liste de toutes les transactions : {id, type: "depense"|"revenu", date, montant, description, categorie}
   budgets: {}, // budget prévu par mois : { "2026-07": { depenses: {courses: 250, ...}, revenus: {...} } }
-  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "", theme: "dark" }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible, thème clair/sombre)
+  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "", theme: "dark", goalCelebrated: false }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible, thème clair/sombre, si le feu d'artifice de l'objectif a déjà été joué)
   cats: JSON.parse(JSON.stringify(DEFAULT_CATS)), // liste des catégories existantes (copie pour ne pas modifier DEFAULT_CATS par erreur)
   catIcons: {}, // surcharge des icônes par catégorie choisie par l'utilisateur : { "courses": "🥖" }
   assets: [], // comptes/livrets/investissements saisis manuellement : {id, nom, montant}
@@ -195,6 +195,50 @@ function render() {
   view.classList.add("view-anim");
   attachViewHandlers();
   animateCounts();
+  checkGoalCelebration();
+}
+
+// Vérifie si l'objectif d'épargne (patrimoine total) vient d'être atteint pour la première fois, et déclenche
+// le feu d'artifice si oui. Le flag settings.goalCelebrated évite de la rejouer à chaque ouverture de l'appli
+// tant que l'objectif reste atteint ; si le patrimoine repasse sous l'objectif (ou si l'objectif est relevé)
+// puis qu'on l'atteint à nouveau plus tard, la célébration pourra rejouer.
+function checkGoalCelebration() {
+  const objectif = Number(state.settings.objectif) || 0;
+  if (objectif <= 0) return;
+  const reached = getPatrimoineTotal() >= objectif;
+  if (reached && !state.settings.goalCelebrated) {
+    state.settings.goalCelebrated = true;
+    persist("settings");
+    celebrateGoal();
+  } else if (!reached && state.settings.goalCelebrated) {
+    state.settings.goalCelebrated = false;
+    persist("settings");
+  }
+}
+
+// Petit feu d'artifice de confettis en CSS pur (aucune dépendance) + message + vibration, joué une seule fois
+// quand l'objectif d'épargne vient d'être atteint. Les confettis sont générés dynamiquement puis retirés du DOM.
+function celebrateGoal() {
+  const colors = ["#37D399", "#F0BE4E", "#FB7A8A", "#4FC3E8", "#A78BFA", "#8FD14F"];
+  const root = document.createElement("div");
+  root.className = "confetti-root";
+  for (let i = 0; i < 60; i++) {
+    const piece = document.createElement("span");
+    piece.className = "confetti-piece";
+    piece.style.left = `${Math.random() * 100}%`;
+    piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+    piece.style.animationDelay = `${Math.random() * 0.5}s`;
+    piece.style.animationDuration = `${2.2 + Math.random() * 1.3}s`;
+    piece.style.setProperty("--rot", `${Math.random() * 520 - 260}deg`);
+    piece.style.setProperty("--drift", `${Math.random() * 180 - 90}px`);
+    piece.style.width = piece.style.height = `${5 + Math.random() * 5}px`;
+    if (Math.random() > 0.5) piece.style.borderRadius = "50%";
+    root.appendChild(piece);
+  }
+  document.body.appendChild(root);
+  showToast("🎉 Objectif d'épargne atteint !");
+  hapticTap();
+  setTimeout(() => root.remove(), 3800);
 }
 
 // Construit l'onglet "Tableau de bord" : le bandeau "reste à vivre" en haut, la comparaison prévu/réel par catégorie,
@@ -835,6 +879,7 @@ function attachViewHandlers() {
   const pieCenterLbl = document.getElementById("pieCenterLbl");
   const allSegs = document.querySelectorAll(".pie-seg");
   const allLegendItems = document.querySelectorAll("[data-legend-cat]");
+  let selectedCat = null; // catégorie actuellement mise en avant dans le camembert (null = aucune, affichage du total)
   // Met en avant la part choisie (plus épaisse, légère ombre) et atténue toutes les autres, pour qu'on
   // voie immédiatement laquelle est sélectionnée. Fait la même chose sur sa légende associée.
   function selectPieSlice(cat) {
@@ -848,12 +893,14 @@ function attachViewHandlers() {
   }
   function showPieDetail(cat, amount, pct) {
     if (!pieCenterAmt) return;
+    selectedCat = cat;
     pieCenterAmt.textContent = fmtEUR(amount);
     pieCenterLbl.textContent = `${categoryIcon(cat)} ${cat} · ${pct}%`;
     selectPieSlice(cat);
   }
   function resetPieDetail() {
     if (!pieCenterAmt) return;
+    selectedCat = null;
     const total = allSegs.length
       ? Array.from(allSegs).reduce((s, el) => s + Number(el.dataset.amount), 0)
       : 0;
@@ -861,14 +908,21 @@ function attachViewHandlers() {
     pieCenterLbl.textContent = "total";
     clearPieSelection();
   }
+  // Cliquer sur une part déjà sélectionnée la désélectionne (bascule), plutôt que de devoir viser le centre
   allSegs.forEach((seg) => {
     seg.style.cursor = "pointer";
-    seg.onclick = () => showPieDetail(seg.dataset.cat, Number(seg.dataset.amount), seg.dataset.pct);
+    seg.onclick = () => {
+      if (selectedCat === seg.dataset.cat) resetPieDetail();
+      else showPieDetail(seg.dataset.cat, Number(seg.dataset.amount), seg.dataset.pct);
+    };
   });
   allLegendItems.forEach((item) => {
     const seg = document.querySelector(`.pie-seg[data-cat="${CSS.escape(item.dataset.legendCat)}"]`);
     if (!seg) return;
-    item.onclick = () => showPieDetail(seg.dataset.cat, Number(seg.dataset.amount), seg.dataset.pct);
+    item.onclick = () => {
+      if (selectedCat === seg.dataset.cat) resetPieDetail();
+      else showPieDetail(seg.dataset.cat, Number(seg.dataset.amount), seg.dataset.pct);
+    };
   });
   const pieCenter = document.getElementById("pieCenter");
   if (pieCenter) pieCenter.onclick = resetPieDetail;
