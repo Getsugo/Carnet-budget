@@ -147,6 +147,59 @@ function getTotals() {
   return { depReel, revReel, totalDep, totalRev, reste: totalRev - totalDep };
 }
 // Regroupe TOUTES les transactions (tous mois confondus) pour construire la série utilisée par le graphique "Reste par mois" (onglet Année)
+// Construit le petit résumé automatique du mois affiché sur le tableau de bord : compare le total des dépenses
+// du mois affiché à la moyenne de TOUS les autres mois (peu importe lesquels), et identifie la catégorie qui
+// explique le plus cet écart (celle dont l'écart va dans le même sens que la tendance globale, en valeur absolue).
+// Renvoie null s'il n'y a pas encore d'autre mois pour comparer (premier mois d'utilisation).
+function getMonthlyInsight() {
+  const curMonth = state.month;
+  const byMonth = {};
+  state.tx.forEach((t) => {
+    if (t.type !== "depense") return;
+    const mk = monthKey(t.date);
+    byMonth[mk] = byMonth[mk] || { total: 0, cats: {} };
+    byMonth[mk].total += t.montant;
+    byMonth[mk].cats[t.categorie] = (byMonth[mk].cats[t.categorie] || 0) + t.montant;
+  });
+  const otherMonths = Object.keys(byMonth).filter((mk) => mk !== curMonth);
+  if (otherMonths.length === 0) return null;
+  const curData = byMonth[curMonth] || { total: 0, cats: {} };
+  const avgTotal = otherMonths.reduce((s, mk) => s + byMonth[mk].total, 0) / otherMonths.length;
+  if (avgTotal <= 0) return null;
+  const diff = curData.total - avgTotal;
+  const pct = (diff / avgTotal) * 100;
+
+  const allCats = new Set();
+  otherMonths.forEach((mk) => Object.keys(byMonth[mk].cats).forEach((c) => allCats.add(c)));
+  Object.keys(curData.cats).forEach((c) => allCats.add(c));
+  let topCat = null, topCatDiff = 0;
+  allCats.forEach((cat) => {
+    const curVal = curData.cats[cat] || 0;
+    const avgVal = otherMonths.reduce((s, mk) => s + ((byMonth[mk].cats || {})[cat] || 0), 0) / otherMonths.length;
+    const catDiff = curVal - avgVal;
+    // On ne garde que les catégories dont l'écart va dans le même sens que la tendance globale
+    // (si le mois est en hausse, on cherche la catégorie qui monte le plus ; si en baisse, celle qui baisse le plus)
+    if ((diff >= 0 && catDiff > topCatDiff) || (diff < 0 && catDiff < topCatDiff)) {
+      topCatDiff = catDiff;
+      topCat = cat;
+    }
+  });
+
+  const THRESHOLD = 5; // en dessous de 5% d'écart avec la moyenne, on considère que c'est stable
+  let text, trend;
+  if (Math.abs(pct) < THRESHOLD) {
+    text = `📊 Ce mois-ci, tes dépenses (${fmtEUR(curData.total)}) sont proches de ta moyenne habituelle (${fmtEUR(avgTotal)}).`;
+    trend = "stable";
+  } else if (pct > 0) {
+    text = `📈 Ce mois-ci, +${Math.round(pct)}% de dépenses par rapport à ta moyenne${topCat ? `, surtout à cause de ${categoryIcon(topCat)} ${topCat} (+${fmtEUR(topCatDiff)})` : ""}.`;
+    trend = "up"; // hausse des dépenses = mauvaise nouvelle -> couleur rouge, pas verte
+  } else {
+    text = `📉 Ce mois-ci, ${Math.round(pct)}% de dépenses par rapport à ta moyenne${topCat ? `, notamment grâce à ${categoryIcon(topCat)} ${topCat} (${fmtEUR(topCatDiff)}) mieux maîtrisé` : ""}.`;
+    trend = "down"; // baisse des dépenses = bonne nouvelle -> couleur verte
+  }
+  return { text, trend };
+}
+
 function getYearlySeries() {
   const map = {};
   state.tx.forEach((t) => {
@@ -317,6 +370,11 @@ function renderDashboard() {
         ${sparkSvg}
       </div>` : ""}
     </div>
+
+    ${(() => {
+      const insight = getMonthlyInsight();
+      return insight ? `<div class="insight-banner insight-${insight.trend}">${esc(insight.text)}</div>` : "";
+    })()}
 
     <div class="grid-2">
       <div class="card card-pad">
