@@ -1,6 +1,6 @@
 /* ---------- Constantes ---------- */
 // Clés utilisées pour sauvegarder chaque partie des données dans le stockage du téléphone (localStorage)
-const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin" };
+const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin", biometric: "carnet:biometric" };
 // Catégories fournies par défaut au tout premier lancement de l'appli (l'utilisateur peut les modifier/supprimer ensuite)
 const DEFAULT_CATS = {
   depenses: ["courses", "loisirs", "voiture", "gasoil", "salle", "cadeaux", "groupama", "resto", "canal", "maman", "autres"],
@@ -166,6 +166,24 @@ function getCompteActuel() {
 function getPatrimoineTotal() {
   const autres = state.assets.reduce((acc, a) => acc + (Number(a.montant) || 0), 0);
   return getCompteActuel() + autres;
+}
+// Reconstruit l'évolution du patrimoine total mois par mois, pour le graphique de l'onglet "Année & objectif".
+// Le compte courant à chaque mois passé est calculé EXACTEMENT (on ré-additionne les transactions jusqu'à la
+// fin de ce mois-là) ; en revanche on ne connaît pas l'historique des comptes ajoutés à la main (Livret A...),
+// donc leur valeur ACTUELLE est utilisée pour tous les mois (approximation, mais c'est la meilleure info dispo
+// tant qu'on n'a pas commencé à suivre leur évolution). Le mois en cours, lui, est donc toujours exact.
+function getPatrimoineSeries() {
+  const monthKeys = [...new Set(state.tx.map((t) => monthKey(t.date)))].sort();
+  const assetsTotal = state.assets.reduce((acc, a) => acc + (Number(a.montant) || 0), 0);
+  return monthKeys.map((mk) => {
+    const [y, m] = mk.split("-").map(Number);
+    const endOfMonth = new Date(y, m, 0).toISOString().slice(0, 10); // dernier jour du mois mk
+    const cumul = state.tx
+      .filter((t) => t.date <= endOfMonth)
+      .reduce((acc, t) => acc + (t.type === "revenu" ? t.montant : -t.montant), 0);
+    const compte = state.settings.soldeInitial + cumul;
+    return { mois: mk, label: monthLabel(mk).slice(0, 3), total: compte + assetsTotal };
+  });
 }
 // Combien de mois restent avant la date objectif (mois calendaires, arrondi à l'entier supérieur)
 function getMoisRestants() {
@@ -657,6 +675,46 @@ function renderBudget() {
 
 // Construit l'onglet "Année & objectif" : barres vert/rouge du reste par mois, objectif d'épargne (patrimoine total),
 // liste des comptes ajoutés manuellement (Livret A, etc.) et réglages (objectif, date, solde de départ)
+// Dessine le graphique d'évolution du patrimoine (courbe + zone remplie), en SVG pur.
+// La couleur est passée en dur (pas en var() CSS) car les <stop> de dégradé SVG ne supportent pas
+// toujours bien les variables CSS suivant les navigateurs — on relit donc la couleur "sage" du thème actif.
+function renderPatrimoineChart(series) {
+  if (series.length < 2) return `<div class="empty">Pas encore assez de mois différents dans tes transactions pour tracer une évolution.</div>`;
+  const sage = state.settings.theme === "light" ? "#14A876" : "#37D399";
+  const vw = 300, vh = 100, padTop = 10, padBottom = 10;
+  const values = series.map((s) => s.total);
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const stepX = vw / (series.length - 1);
+  const points = series.map((s, i) => ({
+    x: i * stepX,
+    y: padTop + (1 - (s.total - min) / range) * (vh - padTop - padBottom),
+  }));
+  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L${points[points.length - 1].x.toFixed(1)},${vh} L0,${vh} Z`;
+  const dots = points.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.4" style="fill:${sage};" />`).join("");
+  const first = series[0].total, last = series[series.length - 1].total;
+  const evolution = last - first;
+  return `
+    <svg class="patrimoine-chart-svg" viewBox="0 0 ${vw} ${vh}" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="patGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${sage}" stop-opacity="0.35" />
+          <stop offset="100%" stop-color="${sage}" stop-opacity="0" />
+        </linearGradient>
+      </defs>
+      <path d="${areaPath}" style="fill:url(#patGrad);" />
+      <path d="${linePath}" style="fill:none;stroke:${sage};stroke-width:2;stroke-linejoin:round;stroke-linecap:round;" />
+      ${dots}
+    </svg>
+    <div class="patrimoine-chart-labels">
+      ${series.map((s) => `<span>${esc(s.label)}</span>`).join("")}
+    </div>
+    <p class="hint" style="margin:10px 0 0;">${evolution >= 0 ? "+" : ""}${fmtEUR(evolution)} depuis ${esc(series[0].label)}. Avant ce mois-ci, les comptes ajoutés à la main (Livret A...) sont comptés à leur valeur actuelle faute d'historique — seul le dernier point est garanti exact.</p>
+  `;
+}
+
 function renderAnnee() {
   const series = getYearlySeries();
   const compteActuel = getCompteActuel();
@@ -694,6 +752,11 @@ function renderAnnee() {
           `).join("")}
         </div>
       </div>`}
+    </div>
+
+    <div class="card card-pad" style="margin-top:20px;">
+      <h3 class="section-title">Évolution du patrimoine</h3>
+      ${renderPatrimoineChart(getPatrimoineSeries())}
     </div>
 
     <div class="card dark card-pad" style="margin-top:20px;">
@@ -1428,6 +1491,10 @@ function openSettingsModal() {
         <h3 class="section-title" style="margin-top:20px;">Verrouillage</h3>
         <p class="hint" style="margin:0 0 14px;">${localStorage.getItem(LS_KEYS.pin) ? "Un code PIN est actuellement demandé à l'ouverture de l'appli." : "Aucun code demandé à l'ouverture. Utile si quelqu'un d'autre peut avoir accès à cet appareil."}</p>
         <button type="button" class="btn btn-outline" id="pinToggleBtn" style="width:100%;justify-content:center;">${localStorage.getItem(LS_KEYS.pin) ? "🔓 Désactiver le code PIN" : "🔒 Activer un code PIN (4 chiffres)"}</button>
+        ${localStorage.getItem(LS_KEYS.pin) ? `
+        <p class="hint" style="margin:14px 0 10px;">${localStorage.getItem(LS_KEYS.biometric) ? "Le déverrouillage par empreinte/Face ID est activé, en plus du code PIN (toujours disponible en repli)." : "En plus du code, tu peux ajouter un raccourci empreinte/Face ID si ton appareil le permet."}</p>
+        <button type="button" class="btn btn-outline" id="bioToggleBtn" style="width:100%;justify-content:center;">${localStorage.getItem(LS_KEYS.biometric) ? "🔓 Désactiver la biométrie" : "👆 Activer le déverrouillage biométrique"}</button>
+        ` : ""}
       </div>
     </div>
   `;
@@ -1450,6 +1517,7 @@ function openSettingsModal() {
       if (saisi === null) return;
       if (saisi.trim() !== localStorage.getItem(LS_KEYS.pin)) { alert("Code incorrect."); return; }
       localStorage.removeItem(LS_KEYS.pin);
+      disableBiometric(); // la biométrie dépend du PIN comme repli, donc on la désactive aussi
       alert("Verrouillage désactivé.");
     } else {
       const p1 = prompt("Choisis un code PIN à 4 chiffres :");
@@ -1462,6 +1530,19 @@ function openSettingsModal() {
       alert("Verrouillage activé — le code sera demandé au prochain lancement de l'appli.");
     }
     openSettingsModal(); // redessine la fenêtre pour mettre à jour le texte/bouton selon le nouvel état
+  };
+  const bioToggleBtn = document.getElementById("bioToggleBtn");
+  if (bioToggleBtn) bioToggleBtn.onclick = async () => {
+    if (localStorage.getItem(LS_KEYS.biometric)) {
+      disableBiometric();
+      alert("Déverrouillage biométrique désactivé.");
+      openSettingsModal();
+    } else {
+      bioToggleBtn.textContent = "Vérification en cours…";
+      const ok = await enableBiometric();
+      if (ok) alert("Déverrouillage biométrique activé !");
+      openSettingsModal();
+    }
   };
   const importDataBtn = document.getElementById("importDataBtn");
   const importDataFileInput = document.getElementById("importDataFile");
@@ -1537,13 +1618,103 @@ function closeOnboarding() {
   localStorage.setItem(LS_KEYS.onboarded, "1");
 }
 
+/* ---------- Déverrouillage biométrique (empreinte / Face ID) ---------- */
+// Utilise l'API WebAuthn du navigateur, qui pilote directement le capteur biométrique du téléphone/PC —
+// aucune donnée d'empreinte ne transite jamais par l'appli, tout est géré par le système d'exploitation.
+// C'est une couche pratique en PLUS du code PIN, pas à sa place : si la biométrie échoue ou n'est pas
+// disponible, on peut toujours retomber sur le PIN. C'est pourquoi elle n'est proposée que si un PIN existe déjà.
+
+// Vérifie si le navigateur ET l'appareil supportent un capteur biométrique utilisable (empreinte, visage...)
+async function biometricAvailable() {
+  if (!window.PublicKeyCredential || !PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) return false;
+  try { return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
+  catch (e) { return false; }
+}
+// Enregistre un nouvel identifiant biométrique auprès du système (déclenche la demande d'empreinte/Face ID
+// une première fois, comme pour n'importe quelle appli qui active ce type de déverrouillage)
+async function enableBiometric() {
+  const available = await biometricAvailable();
+  if (!available) { alert("Aucun capteur biométrique (empreinte, visage...) détecté ou activé sur cet appareil/navigateur."); return false; }
+  try {
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: "Le Carnet" },
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "carnet-local", displayName: "Le Carnet" },
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+        authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+        timeout: 60000,
+      },
+    });
+    const credId = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+    localStorage.setItem(LS_KEYS.biometric, credId);
+    return true;
+  } catch (e) {
+    alert("Impossible d'activer la biométrie (action annulée ou non supportée par ce navigateur).");
+    return false;
+  }
+}
+// Désactive le raccourci biométrique (le code PIN continue de fonctionner normalement)
+function disableBiometric() { localStorage.removeItem(LS_KEYS.biometric); }
+// Déclenche la demande d'empreinte/Face ID pour déverrouiller l'appli. Comme c'est une appli 100% locale
+// sans serveur pour vérifier la signature cryptographique, on considère que la cérémonie WebAuthn qui réussit
+// (sans exception) est une preuve suffisante que l'appareil a validé la biométrie — c'est le système qui a fait la vérification.
+async function tryBiometricUnlock() {
+  const credId = localStorage.getItem(LS_KEYS.biometric);
+  if (!credId) return false;
+  try {
+    const idBytes = Uint8Array.from(atob(credId), (c) => c.charCodeAt(0));
+    await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ id: idBytes, type: "public-key" }],
+        userVerification: "required",
+        timeout: 60000,
+      },
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 /* ---------- Verrouillage par code PIN ---------- */
 // Au démarrage : si un PIN a été configuré (voir openSettingsModal), on bloque l'accès derrière un écran de saisie
-// avant de démarrer l'appli. C'est juste un frein d'accès simple (pas un vrai chiffrement) — largement suffisant
-// pour empêcher un regard indiscret sur un téléphone partagé ou égaré, mais pas une protection cryptographique.
+// avant de démarrer l'appli. C'est un frein d'accès simple (pas un vrai chiffrement), largement suffisant pour
+// empêcher un regard indiscret sur un téléphone partagé ou égaré. Si un raccourci biométrique est aussi activé,
+// on le propose en premier (plus rapide), avec le code PIN toujours disponible en repli.
 function checkPinLock() {
   const pin = localStorage.getItem(LS_KEYS.pin);
   if (!pin) { bootApp(); return; }
+  const bioId = localStorage.getItem(LS_KEYS.biometric);
+  if (bioId) paintLockBiometric(pin); else paintLockPin(pin);
+}
+// Écran de verrouillage : étape biométrique (bouton "Déverrouiller" qui déclenche l'empreinte/Face ID),
+// avec un lien pour basculer sur la saisie du code PIN si besoin (échec, capteur indisponible, etc.)
+function paintLockBiometric(pin) {
+  document.getElementById("lockRoot").innerHTML = `
+    <div class="onboarding-backdrop">
+      <div class="onboarding-card">
+        <div class="onboarding-icon">🔒</div>
+        <h3 class="onboarding-title">Appli verrouillée</h3>
+        <p class="onboarding-text">Déverrouille avec ton empreinte ou Face ID.</p>
+        <button type="button" class="btn btn-solid" id="bioUnlockBtn" style="width:100%;justify-content:center;">👆 Déverrouiller</button>
+        <div id="lockError" class="lock-error"></div>
+        <button type="button" class="link-btn" id="useCodeInstead" style="width:100%;margin-top:14px;text-align:center;">Utiliser le code PIN à la place</button>
+      </div>
+    </div>
+  `;
+  const tryBio = async () => {
+    document.getElementById("lockError").textContent = "";
+    const ok = await tryBiometricUnlock();
+    if (ok) { document.getElementById("lockRoot").innerHTML = ""; bootApp(); }
+    else document.getElementById("lockError").textContent = "Échec — réessaie ou utilise le code PIN.";
+  };
+  document.getElementById("bioUnlockBtn").onclick = tryBio;
+  document.getElementById("useCodeInstead").onclick = () => paintLockPin(pin);
+}
+// Écran de verrouillage : étape code PIN classique (aussi utilisée si aucun raccourci biométrique n'est activé)
+function paintLockPin(pin) {
   document.getElementById("lockRoot").innerHTML = `
     <div class="onboarding-backdrop">
       <div class="onboarding-card">
