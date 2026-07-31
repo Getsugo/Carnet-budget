@@ -1,6 +1,6 @@
 /* ---------- Constantes ---------- */
 // Clés utilisées pour sauvegarder chaque partie des données dans le stockage du téléphone (localStorage)
-const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin", biometric: "carnet:biometric" };
+const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin", biometric: "carnet:biometric", salt: "carnet:salt", verify: "carnet:verify", encOn: "carnet:encOn" };
 // Catégories fournies par défaut au tout premier lancement de l'appli (l'utilisateur peut les modifier/supprimer ensuite)
 const DEFAULT_CATS = {
   depenses: ["courses", "loisirs", "voiture", "gasoil", "salle", "cadeaux", "groupama", "resto", "canal", "maman", "autres"],
@@ -88,14 +88,21 @@ function loadState() {
 // Sauvegarde l'état dans le stockage du téléphone.
 // "part" permet de ne sauvegarder qu'un seul morceau (ex: persist("tx") après avoir modifié une transaction),
 // ou tout sauvegarder d'un coup si "part" n'est pas précisé.
+// Si le chiffrement est actif (sessionKey présente), chaque écriture est chiffrée avant d'être stockée — en
+// tâche de fond (persist() reste synchrone en apparence, pas besoin de toucher tous ses appels dans le fichier).
 function persist(part) {
-  if (part === "tx" || !part) localStorage.setItem(LS_KEYS.tx, JSON.stringify(state.tx));
-  if (part === "budgets" || !part) localStorage.setItem(LS_KEYS.budgets, JSON.stringify(state.budgets));
-  if (part === "settings" || !part) localStorage.setItem(LS_KEYS.settings, JSON.stringify(state.settings));
-  if (part === "cats" || !part) localStorage.setItem(LS_KEYS.cats, JSON.stringify(state.cats));
-  if (part === "assets" || !part) localStorage.setItem(LS_KEYS.assets, JSON.stringify(state.assets));
-  if (part === "catIcons" || !part) localStorage.setItem(LS_KEYS.catIcons, JSON.stringify(state.catIcons));
-  if (part === "recurring" || !part) localStorage.setItem(LS_KEYS.recurring, JSON.stringify(state.recurring));
+  const write = (key, value) => {
+    const json = JSON.stringify(value);
+    if (sessionKey) encryptString(sessionKey, json).then((enc) => localStorage.setItem(key, enc));
+    else localStorage.setItem(key, json);
+  };
+  if (part === "tx" || !part) write(LS_KEYS.tx, state.tx);
+  if (part === "budgets" || !part) write(LS_KEYS.budgets, state.budgets);
+  if (part === "settings" || !part) write(LS_KEYS.settings, state.settings);
+  if (part === "cats" || !part) write(LS_KEYS.cats, state.cats);
+  if (part === "assets" || !part) write(LS_KEYS.assets, state.assets);
+  if (part === "catIcons" || !part) write(LS_KEYS.catIcons, state.catIcons);
+  if (part === "recurring" || !part) write(LS_KEYS.recurring, state.recurring);
 }
 
 // Applique le thème (clair/sombre) choisi dans les réglages : pose l'attribut data-theme sur <html>, ce qui
@@ -1521,6 +1528,8 @@ function shiftMonth(delta) {
 // dans leurs onglets respectifs) : revoir le tutoriel, exporter/importer une sauvegarde.
 function openSettingsModal() {
   const root = document.getElementById("modalRoot");
+  const isEncrypted = localStorage.getItem(LS_KEYS.encOn) === "1";
+  const isLocked = isEncrypted || !!localStorage.getItem(LS_KEYS.pin);
   root.innerHTML = `
     <div class="modal-backdrop" id="settingsBackdrop">
       <div class="modal">
@@ -1547,11 +1556,16 @@ function openSettingsModal() {
         </div>
 
         <h3 class="section-title" style="margin-top:20px;">Verrouillage</h3>
-        <p class="hint" style="margin:0 0 14px;">${localStorage.getItem(LS_KEYS.pin) ? "Un code PIN est actuellement demandé à l'ouverture de l'appli." : "Aucun code demandé à l'ouverture. Utile si quelqu'un d'autre peut avoir accès à cet appareil."}</p>
-        <button type="button" class="btn btn-outline" id="pinToggleBtn" style="width:100%;justify-content:center;">${localStorage.getItem(LS_KEYS.pin) ? "🔓 Désactiver le code PIN" : "🔒 Activer un code PIN (4 chiffres)"}</button>
-        ${localStorage.getItem(LS_KEYS.pin) ? `
+        <p class="hint" style="margin:0 0 14px;">${isLocked ? "Un code PIN est actuellement demandé à l'ouverture de l'appli." : "Aucun code demandé à l'ouverture. Utile si quelqu'un d'autre peut avoir accès à cet appareil."}</p>
+        <button type="button" class="btn btn-outline" id="pinToggleBtn" style="width:100%;justify-content:center;">${isLocked ? "🔓 Désactiver le code PIN" : "🔒 Activer un code PIN (4 chiffres)"}</button>
+        ${isLocked && !isEncrypted ? `
         <p class="hint" style="margin:14px 0 10px;">${localStorage.getItem(LS_KEYS.biometric) ? "Le déverrouillage par empreinte/Face ID est activé, en plus du code PIN (toujours disponible en repli)." : "En plus du code, tu peux ajouter un raccourci empreinte/Face ID si ton appareil le permet."}</p>
         <button type="button" class="btn btn-outline" id="bioToggleBtn" style="width:100%;justify-content:center;">${localStorage.getItem(LS_KEYS.biometric) ? "🔓 Désactiver la biométrie" : "👆 Activer le déverrouillage biométrique"}</button>
+        ` : ""}
+        ${isLocked ? `
+        <p class="hint" style="margin:14px 0 10px;">${isEncrypted ? "🔐 Tes données sont chiffrées (AES-256) : illisibles pour qui fouillerait le stockage technique du navigateur, même sans passer par l'appli." : "Renforce la protection : chiffre aussi tes données elles-mêmes avec ce code (pas juste l'écran d'accueil). Désactive le raccourci biométrique, qui ne peut pas fournir la clé de déchiffrement."}</p>
+        <button type="button" class="btn ${isEncrypted ? "btn-outline" : "btn-solid"}" id="encToggleBtn" style="width:100%;justify-content:center;">${isEncrypted ? "🔓 Déchiffrer mes données" : "🔐 Chiffrer mes données (AES-256)"}</button>
+        ${!isEncrypted ? `<p class="hint" style="margin-top:8px;">⚠️ Si tu oublies ce code une fois le chiffrement activé, tes données seront définitivement illisibles — aucune récupération possible, même par moi.</p>` : ""}
         ` : ""}
       </div>
     </div>
@@ -1569,11 +1583,16 @@ function openSettingsModal() {
   document.getElementById("replayTutoBtn").onclick = () => { root.innerHTML = ""; showOnboarding(); };
   document.getElementById("exportDataBtn").onclick = () => exportData();
   document.getElementById("exportCSVBtn").onclick = () => exportCSV();
-  document.getElementById("pinToggleBtn").onclick = () => {
-    if (localStorage.getItem(LS_KEYS.pin)) {
+  document.getElementById("pinToggleBtn").onclick = async () => {
+    if (isLocked) {
       const saisi = prompt("Entre ton code PIN actuel pour désactiver le verrouillage :");
       if (saisi === null) return;
-      if (saisi.trim() !== localStorage.getItem(LS_KEYS.pin)) { alert("Code incorrect."); return; }
+      if (isEncrypted) {
+        const ok = await disableEncryption(saisi.trim());
+        if (!ok) { alert("Code incorrect."); return; }
+      } else if (saisi.trim() !== localStorage.getItem(LS_KEYS.pin)) {
+        alert("Code incorrect."); return;
+      }
       localStorage.removeItem(LS_KEYS.pin);
       disableBiometric(); // la biométrie dépend du PIN comme repli, donc on la désactive aussi
       alert("Verrouillage désactivé.");
@@ -1588,6 +1607,24 @@ function openSettingsModal() {
       alert("Verrouillage activé — le code sera demandé au prochain lancement de l'appli.");
     }
     openSettingsModal(); // redessine la fenêtre pour mettre à jour le texte/bouton selon le nouvel état
+  };
+  const encToggleBtn = document.getElementById("encToggleBtn");
+  if (encToggleBtn) encToggleBtn.onclick = async () => {
+    if (isEncrypted) {
+      const saisi = prompt("Entre ton code PIN pour déchiffrer tes données :");
+      if (saisi === null) return;
+      encToggleBtn.textContent = "Déchiffrement en cours…";
+      const ok = await disableEncryption(saisi.trim());
+      if (ok) alert("Chiffrement désactivé — tes données sont de nouveau stockées normalement (le code PIN reste actif).");
+      else alert("Code incorrect.");
+    } else {
+      if (!confirm("Chiffrer tes données avec ton code PIN actuel ?\n\nSi tu oublies ce code par la suite, tes données seront définitivement illisibles : il n'existe aucun moyen de les récupérer sans lui, ni par moi ni par personne.\n\nContinuer ?")) return;
+      encToggleBtn.textContent = "Chiffrement en cours…";
+      const ok = await enableEncryption();
+      if (ok) alert("Chiffrement activé ! Tes données sont maintenant illisibles sans ton code PIN.");
+      else alert("Impossible d'activer le chiffrement (aucun code PIN actif ?).");
+    }
+    openSettingsModal();
   };
   const bioToggleBtn = document.getElementById("bioToggleBtn");
   if (bioToggleBtn) bioToggleBtn.onclick = async () => {
@@ -1736,20 +1773,109 @@ async function tryBiometricUnlock() {
   }
 }
 
+/* ---------- Chiffrement des données (option, en plus du code PIN) ---------- */
+// Aujourd'hui, le code PIN bloque juste l'AFFICHAGE de l'appli : les données restent lisibles en clair dans le
+// stockage technique du navigateur pour qui sait où regarder (outils développeur). Le chiffrement va plus loin :
+// les données elles-mêmes sont transformées en charabia illisible (AES-256), et seule la bonne saisie du code
+// permet de reconstituer la clé qui les déchiffre. Cette clé n'est JAMAIS sauvegardée : elle est recalculée à
+// chaque déverrouillage à partir du code tapé, et ne vit qu'en mémoire pendant que l'appli est ouverte.
+let sessionKey = null;
+const ENC_PARTS = ["tx", "budgets", "settings", "cats", "assets", "catIcons", "recurring"];
+
+// Transforme un code PIN en une clé de chiffrement AES-256, via PBKDF2 (150 000 itérations : ça ralentit
+// volontairement chaque tentative, pour rendre un essai "à l'aveugle" de toutes les combinaisons plus coûteux).
+async function deriveKeyFromPin(pin, saltB64) {
+  const salt = Uint8Array.from(atob(saltB64), (c) => c.charCodeAt(0));
+  const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
+    baseKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+  );
+}
+async function encryptString(key, plain) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const buf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plain));
+  return btoa(String.fromCharCode(...iv)) + ":" + btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+async function decryptString(key, payload) {
+  const [ivB64, ctB64] = payload.split(":");
+  const iv = Uint8Array.from(atob(ivB64), (c) => c.charCodeAt(0));
+  const ct = Uint8Array.from(atob(ctB64), (c) => c.charCodeAt(0));
+  const buf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+  return new TextDecoder().decode(buf);
+}
+// Charge l'état APRÈS déverrouillage en mode chiffré : chaque morceau est déchiffré avant d'être interprété.
+async function loadStateDecrypted(key) {
+  for (const part of ENC_PARTS) {
+    const raw = localStorage.getItem(LS_KEYS[part]);
+    if (raw == null) continue;
+    try { state[part] = JSON.parse(await decryptString(key, raw)); } catch (e) {}
+  }
+  if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = "";
+  if (state.tx.length) { const months = state.tx.map((t) => monthKey(t.date)).sort(); state.month = months[months.length - 1]; }
+}
+// Active le chiffrement : dérive une clé du code PIN actuel, chiffre toutes les données déjà stockées, puis
+// arrête de garder le code en clair (il ne sert plus qu'à re-dériver la clé, jamais retenu tel quel). La
+// biométrie est désactivée au passage : elle ne peut techniquement pas fournir la clé de déchiffrement.
+async function enableEncryption() {
+  const pin = localStorage.getItem(LS_KEYS.pin);
+  if (!pin) return false;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const saltB64 = btoa(String.fromCharCode(...salt));
+  const key = await deriveKeyFromPin(pin, saltB64);
+  for (const part of ENC_PARTS) {
+    const raw = localStorage.getItem(LS_KEYS[part]);
+    if (raw == null) continue;
+    localStorage.setItem(LS_KEYS[part], await encryptString(key, raw));
+  }
+  localStorage.setItem(LS_KEYS.verify, await encryptString(key, "OK")); // petit repère chiffré, sert juste à vérifier qu'un code tapé est correct
+  localStorage.setItem(LS_KEYS.salt, saltB64);
+  localStorage.setItem(LS_KEYS.encOn, "1");
+  localStorage.removeItem(LS_KEYS.pin);
+  disableBiometric();
+  sessionKey = key;
+  return true;
+}
+// Désactive le chiffrement : vérifie d'abord le code (via le repère), puis déchiffre tout et revient à un
+// stockage en clair comme avant. Si le code est faux, rien n'est modifié.
+async function disableEncryption(pinTyped) {
+  const saltB64 = localStorage.getItem(LS_KEYS.salt);
+  if (!saltB64) return false;
+  const key = await deriveKeyFromPin(pinTyped, saltB64);
+  try {
+    const check = await decryptString(key, localStorage.getItem(LS_KEYS.verify));
+    if (check !== "OK") return false;
+  } catch (e) { return false; }
+  for (const part of ENC_PARTS) {
+    const raw = localStorage.getItem(LS_KEYS[part]);
+    if (raw == null) continue;
+    localStorage.setItem(LS_KEYS[part], await decryptString(key, raw));
+  }
+  localStorage.removeItem(LS_KEYS.salt);
+  localStorage.removeItem(LS_KEYS.verify);
+  localStorage.removeItem(LS_KEYS.encOn);
+  localStorage.setItem(LS_KEYS.pin, pinTyped);
+  sessionKey = null;
+  return true;
+}
+
 /* ---------- Verrouillage par code PIN ---------- */
 // Au démarrage : si un PIN a été configuré (voir openSettingsModal), on bloque l'accès derrière un écran de saisie
-// avant de démarrer l'appli. C'est un frein d'accès simple (pas un vrai chiffrement), largement suffisant pour
-// empêcher un regard indiscret sur un téléphone partagé ou égaré. Si un raccourci biométrique est aussi activé,
-// on le propose en premier (plus rapide), avec le code PIN toujours disponible en repli.
-function checkPinLock() {
-  const pin = localStorage.getItem(LS_KEYS.pin);
-  if (!pin) { bootApp(); return; }
+// avant de démarrer l'appli. Si en plus le chiffrement est actif, les données ne sont même pas chargées en mémoire
+// tant que le bon code n'a pas été tapé (avant, ce n'était qu'un blocage visuel : les données étaient déjà en
+// mémoire dès le démarrage). Si un raccourci biométrique est activé (uniquement possible hors mode chiffré, la
+// biométrie ne pouvant pas fournir la clé de déchiffrement), il est proposé en premier, avec le PIN en repli.
+function checkPinLock(encOn) {
+  const pinPlain = localStorage.getItem(LS_KEYS.pin);
+  if (!encOn && !pinPlain) { bootApp(); return; }
   const bioId = localStorage.getItem(LS_KEYS.biometric);
-  if (bioId) paintLockBiometric(pin); else paintLockPin(pin);
+  if (bioId && !encOn) paintLockBiometric(); else paintLockPin(encOn);
 }
 // Écran de verrouillage : étape biométrique (bouton "Déverrouiller" qui déclenche l'empreinte/Face ID),
 // avec un lien pour basculer sur la saisie du code PIN si besoin (échec, capteur indisponible, etc.)
-function paintLockBiometric(pin) {
+// N'est jamais utilisée en mode chiffré : dans ce cas, loadState() a déjà tourné en clair avant l'écran de
+// verrouillage (voir init()), donc pas besoin de redéclencher un chargement ici.
+function paintLockBiometric() {
   document.getElementById("lockRoot").innerHTML = `
     <div class="onboarding-backdrop">
       <div class="onboarding-card">
@@ -1769,10 +1895,13 @@ function paintLockBiometric(pin) {
     else document.getElementById("lockError").textContent = "Échec — réessaie ou utilise le code PIN.";
   };
   document.getElementById("bioUnlockBtn").onclick = tryBio;
-  document.getElementById("useCodeInstead").onclick = () => paintLockPin(pin);
+  document.getElementById("useCodeInstead").onclick = () => paintLockPin(false);
 }
-// Écran de verrouillage : étape code PIN classique (aussi utilisée si aucun raccourci biométrique n'est activé)
-function paintLockPin(pin) {
+// Écran de verrouillage : étape code PIN. En mode normal, comparaison directe au code stocké.
+// En mode chiffré, le code tapé sert à recalculer la clé de déchiffrement ; sa validité se vérifie en
+// déchiffrant le petit repère "verify" — si ça réussit, le code était bon ET les vraies données sont
+// déchiffrées dans la foulée (elles n'étaient pas encore en mémoire jusqu'ici).
+function paintLockPin(encOn) {
   document.getElementById("lockRoot").innerHTML = `
     <div class="onboarding-backdrop">
       <div class="onboarding-card">
@@ -1786,15 +1915,24 @@ function paintLockPin(pin) {
     </div>
   `;
   const input = document.getElementById("lockInput");
-  const tryUnlock = () => {
-    if (input.value.trim() === pin) {
+  const tryUnlock = async () => {
+    const val = input.value.trim();
+    const fail = () => { document.getElementById("lockError").textContent = "Code incorrect, réessaie."; input.value = ""; input.focus(); };
+    if (!encOn) {
+      if (val === localStorage.getItem(LS_KEYS.pin)) { document.getElementById("lockRoot").innerHTML = ""; bootApp(); }
+      else fail();
+      return;
+    }
+    try {
+      const key = await deriveKeyFromPin(val, localStorage.getItem(LS_KEYS.salt));
+      const check = await decryptString(key, localStorage.getItem(LS_KEYS.verify));
+      if (check !== "OK") throw new Error("mauvais code");
+      sessionKey = key;
+      await loadStateDecrypted(key);
+      applyTheme(); // le thème par défaut était affiché jusqu'ici (vrais réglages pas encore déchiffrés) -> on corrige immédiatement
       document.getElementById("lockRoot").innerHTML = "";
       bootApp();
-    } else {
-      document.getElementById("lockError").textContent = "Code incorrect, réessaie.";
-      input.value = "";
-      input.focus();
-    }
+    } catch (e) { fail(); }
   };
   document.getElementById("lockSubmit").onclick = tryUnlock;
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") tryUnlock(); });
@@ -1803,10 +1941,11 @@ function paintLockPin(pin) {
 
 /* ---------- Init ---------- */
 function init() {
-  loadState();
+  const encOn = localStorage.getItem(LS_KEYS.encOn) === "1";
+  if (!encOn) loadState(); // en mode chiffré, on attend le bon code avant de charger quoi que ce soit (voir paintLockPin)
   applyTheme();
   document.getElementById("loading").style.display = "none";
-  checkPinLock();
+  checkPinLock(encOn);
 }
 
 // Démarrage effectif de l'appli (après un éventuel déverrouillage par PIN, ou immédiatement s'il n'y en a pas)
