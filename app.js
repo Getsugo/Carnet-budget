@@ -627,6 +627,52 @@ function removeCategory(type, cat) {
   persist("cats"); persist("budgets");
 }
 
+// Fenêtre de création directe d'une catégorie (type = "depenses" ou "revenus") : avant, il fallait passer par
+// l'ajout d'une transaction pour en créer une (en tapant un nom inconnu dans le champ catégorie), ce qui n'était
+// pas évident. Ce bouton permet de créer une catégorie vide directement depuis Budget prévu, sans transaction.
+function openCategoryModal(type) {
+  const root = document.getElementById("modalRoot");
+  const label = type === "depenses" ? "de dépense" : "de revenu";
+  root.innerHTML = `
+    <div class="modal-backdrop" id="catModalBackdrop">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>Nouvelle catégorie ${label}</h3>
+          <button type="button" id="closeCatModal">✕</button>
+        </div>
+        <div class="field">
+          <label>Nom</label>
+          <input type="text" id="newCatName" placeholder="ex : abonnements" autofocus />
+        </div>
+        <div class="field">
+          <label>Icône (optionnel)</label>
+          <input type="text" id="newCatIcon" placeholder="💳 par défaut si laissé vide" maxlength="4" />
+        </div>
+        <div id="catModalError" class="lock-error"></div>
+        <button type="button" class="submit-btn" id="createCatBtn">Créer la catégorie</button>
+      </div>
+    </div>
+  `;
+  const close = () => (root.innerHTML = "");
+  document.getElementById("catModalBackdrop").onclick = (e) => { if (e.target.id === "catModalBackdrop") close(); };
+  document.getElementById("closeCatModal").onclick = close;
+  const nameInput = document.getElementById("newCatName");
+  const submit = () => {
+    const name = nameInput.value.trim().toLowerCase();
+    const icon = document.getElementById("newCatIcon").value.trim();
+    const err = document.getElementById("catModalError");
+    if (!name) { err.textContent = "Donne un nom à la catégorie."; return; }
+    if (state.cats[type].some((c) => c.toLowerCase() === name)) { err.textContent = "Cette catégorie existe déjà."; return; }
+    state.cats[type].push(name);
+    persist("cats");
+    if (icon) { state.catIcons[name] = icon; persist("catIcons"); }
+    close();
+    render();
+  };
+  document.getElementById("createCatBtn").onclick = submit;
+  nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+}
+
 /* ---------- Transactions récurrentes ---------- */
 // Crée automatiquement, pour chaque règle récurrente (loyer, abonnement, salaire...), la transaction du mois
 // calendaire réel actuel — mais une seule fois par mois : on retient dans "dernierMoisApplique" le dernier mois
@@ -683,12 +729,18 @@ function renderBudget() {
   return `
     <div class="grid-2" style="margin-top:0;">
       <div class="card card-pad">
-        <h3 class="section-title">Dépenses prévues</h3>
-        ${col("depenses", state.cats.depenses)}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <h3 class="section-title" style="margin:0;">Dépenses prévues</h3>
+          <button type="button" class="btn btn-outline" data-new-cat="depenses" style="flex-shrink:0;">+ Créer</button>
+        </div>
+        <div style="margin-top:12px;">${col("depenses", state.cats.depenses)}</div>
       </div>
       <div class="card card-pad">
-        <h3 class="section-title">Revenus prévus</h3>
-        ${col("revenus", state.cats.revenus)}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <h3 class="section-title" style="margin:0;">Revenus prévus</h3>
+          <button type="button" class="btn btn-outline" data-new-cat="revenus" style="flex-shrink:0;">+ Créer</button>
+        </div>
+        <div style="margin-top:12px;">${col("revenus", state.cats.revenus)}</div>
       </div>
     </div>
     <p class="hint" style="margin-top:14px;">Astuce : tape sur l'icône d'une catégorie pour la changer, ou sur ✕ pour la supprimer (les transactions déjà enregistrées avec cette catégorie ne sont pas touchées).</p>
@@ -1140,6 +1192,10 @@ function attachViewHandlers() {
         render();
       }
     };
+  });
+  // Créer une nouvelle catégorie directement (bouton "+ Créer" en haut de chaque colonne, Budget prévu)
+  document.querySelectorAll("[data-new-cat]").forEach((btn) => {
+    btn.onclick = () => openCategoryModal(btn.dataset.newCat);
   });
   // Changer l'icône d'une catégorie (clic sur l'emoji dans l'onglet Budget prévu)
   document.querySelectorAll("[data-icon-edit]").forEach((btn) => {
