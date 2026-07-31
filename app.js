@@ -28,7 +28,7 @@ function categoryIcon(cat) {
 let state = {
   tx: [], // liste de toutes les transactions : {id, type: "depense"|"revenu", date, montant, description, categorie}
   budgets: {}, // budget prévu par mois : { "2026-07": { depenses: {courses: 250, ...}, revenus: {...} } }
-  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "", theme: "dark", goalCelebrated: false }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible, thème clair/sombre, si le feu d'artifice de l'objectif a déjà été joué)
+  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "", theme: "dark", goalCelebrated: false, backupReminder: { freq: "none", when: "mid", lastPeriod: null } }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible, thème clair/sombre, si le feu d'artifice de l'objectif a déjà été joué, rappel de sauvegarde périodique)
   cats: JSON.parse(JSON.stringify(DEFAULT_CATS)), // liste des catégories existantes (copie pour ne pas modifier DEFAULT_CATS par erreur)
   catIcons: {}, // surcharge des icônes par catégorie choisie par l'utilisateur : { "courses": "🥖" }
   assets: [], // comptes/livrets/investissements saisis manuellement : {id, nom, montant}
@@ -82,6 +82,7 @@ function loadState() {
   try { const v = localStorage.getItem(LS_KEYS.catIcons); if (v) state.catIcons = JSON.parse(v); } catch (e) {}
   try { const v = localStorage.getItem(LS_KEYS.recurring); if (v) state.recurring = JSON.parse(v); } catch (e) {}
   if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = ""; // rétrocompatibilité si le réglage n'existait pas encore
+  if (!state.settings.backupReminder) state.settings.backupReminder = { freq: "none", when: "mid", lastPeriod: null }; // idem
   // Au démarrage, on se place automatiquement sur le mois de la transaction la plus récente (plutôt que le mois calendaire actuel)
   if (state.tx.length) { const months = state.tx.map((t) => monthKey(t.date)).sort(); state.month = months[months.length - 1]; }
 }
@@ -888,6 +889,76 @@ function renderAnnee() {
 /* ---------- Sauvegarde / restauration (export-import manuel) ---------- */
 // Regroupe toutes les données de l'appli dans un seul objet, puis déclenche le téléchargement d'un fichier .json
 // (c'est ce fichier qu'on transfère à la main vers un autre appareil pour "synchroniser")
+/* ---------- Rappel de sauvegarde périodique ---------- */
+// Comme une PWA sans serveur ne peut pas envoyer de vraie notification pendant qu'elle est fermée (pas de
+// "réveil" en arrière-plan fiable, surtout sur iPhone), le rappel se vérifie à chaque OUVERTURE de l'appli :
+// si on est dans la bonne fenêtre de temps (ex : "milieu de mois") et qu'on n'a pas déjà montré le rappel pour
+// cette période, on l'affiche. C'est un vrai rappel utile, juste pas une notification qui arrive dans la poche.
+
+// Calcule un identifiant unique pour la période actuelle (ex : "2026-07" pour le mois, ou une date de lundi
+// pour la semaine) — sert à savoir si le rappel a déjà été montré pour cette période précise.
+function getReminderPeriodKey(freq, date) {
+  if (freq === "week") {
+    const dow = (date.getDay() + 6) % 7; // 0 = lundi ... 6 = dimanche
+    const monday = new Date(date); monday.setDate(date.getDate() - dow);
+    return monday.toISOString().slice(0, 10);
+  }
+  if (freq === "month") return monthKey(date.toISOString().slice(0, 10));
+  if (freq === "quarter") return `${date.getFullYear()}-Q${Math.ceil((date.getMonth() + 1) / 3)}`;
+  return null;
+}
+// Vérifie si on est actuellement dans la bonne "fenêtre" (début/milieu/fin) pour la fréquence choisie
+function isInReminderWindow(freq, when, date) {
+  if (freq === "week") {
+    const dow = (date.getDay() + 6) % 7; // 0 = lundi ... 6 = dimanche
+    if (when === "start") return dow <= 1; // lundi-mardi
+    if (when === "end") return dow >= 5; // samedi-dimanche
+    return dow >= 2 && dow <= 4; // mercredi-vendredi
+  }
+  if (freq === "month") {
+    const day = date.getDate();
+    const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    if (when === "start") return day <= 10;
+    if (when === "end") return day > daysInMonth - 10;
+    return day > 10 && day <= daysInMonth - 10;
+  }
+  return true; // "quarter" : pas de fenêtre fine, dès qu'on change de trimestre ça suffit
+}
+// Renvoie true si le rappel doit s'afficher maintenant (bonne fréquence configurée, dans la bonne fenêtre,
+// et pas déjà montré pour cette période précise)
+function isBackupReminderDue() {
+  const r = state.settings.backupReminder;
+  if (!r || r.freq === "none") return false;
+  const now = new Date();
+  const periodKey = getReminderPeriodKey(r.freq, now);
+  if (periodKey === r.lastPeriod) return false;
+  if (!isInReminderWindow(r.freq, r.when, now)) return false;
+  return true;
+}
+// Affiche le rappel (réutilise le style visuel du tutoriel) et retient qu'il a été montré pour cette période
+function showBackupReminder() {
+  const r = state.settings.backupReminder;
+  const periodKey = getReminderPeriodKey(r.freq, new Date());
+  const dismiss = () => {
+    state.settings.backupReminder.lastPeriod = periodKey;
+    persist("settings");
+    document.getElementById("onboardingRoot").innerHTML = "";
+  };
+  document.getElementById("onboardingRoot").innerHTML = `
+    <div class="onboarding-backdrop">
+      <div class="onboarding-card">
+        <div class="onboarding-icon">💾</div>
+        <h3 class="onboarding-title">Petit rappel</h3>
+        <p class="onboarding-text">Ça fait un moment — pense à exporter une sauvegarde de tes données, pour les garder en sécurité ou les transférer vers un autre appareil.</p>
+        <button type="button" class="btn btn-solid" id="reminderExportBtn" style="width:100%;justify-content:center;margin-bottom:10px;">⬇ Exporter maintenant</button>
+        <button type="button" class="link-btn" id="reminderLaterBtn" style="width:100%;text-align:center;">Plus tard</button>
+      </div>
+    </div>
+  `;
+  document.getElementById("reminderExportBtn").onclick = () => { exportData(); dismiss(); };
+  document.getElementById("reminderLaterBtn").onclick = dismiss;
+}
+
 function exportData() {
   const payload = {
     _app: "le-carnet", _version: 1, _exportedAt: new Date().toISOString(),
@@ -1555,6 +1626,28 @@ function openSettingsModal() {
           <input type="file" id="importDataFile" accept="application/json" style="display:none;" />
         </div>
 
+        <h3 class="section-title" style="margin-top:20px;">Rappel de sauvegarde</h3>
+        <p class="hint" style="margin:0 0 14px;">Un petit message s'affichera à l'ouverture de l'appli, à la fréquence choisie, pour te rappeler d'exporter une sauvegarde. (Pas une vraie notification — une PWA sans serveur ne peut pas en envoyer pendant qu'elle est fermée.)</p>
+        <div class="field">
+          <label>Fréquence</label>
+          <select id="reminderFreq">
+            <option value="none" ${state.settings.backupReminder.freq === "none" ? "selected" : ""}>Jamais</option>
+            <option value="week" ${state.settings.backupReminder.freq === "week" ? "selected" : ""}>Chaque semaine</option>
+            <option value="month" ${state.settings.backupReminder.freq === "month" ? "selected" : ""}>Chaque mois</option>
+            <option value="quarter" ${state.settings.backupReminder.freq === "quarter" ? "selected" : ""}>Tous les 3 mois</option>
+          </select>
+        </div>
+        ${["week", "month"].includes(state.settings.backupReminder.freq) ? `
+        <div class="field">
+          <label>Moment${state.settings.backupReminder.freq === "week" ? " de la semaine" : " du mois"}</label>
+          <select id="reminderWhen">
+            <option value="start" ${state.settings.backupReminder.when === "start" ? "selected" : ""}>${state.settings.backupReminder.freq === "week" ? "Début (lundi-mardi)" : "Début (1-10)"}</option>
+            <option value="mid" ${state.settings.backupReminder.when === "mid" ? "selected" : ""}>${state.settings.backupReminder.freq === "week" ? "Milieu (mercredi-vendredi)" : "Milieu"}</option>
+            <option value="end" ${state.settings.backupReminder.when === "end" ? "selected" : ""}>${state.settings.backupReminder.freq === "week" ? "Fin (week-end)" : "Fin de mois"}</option>
+          </select>
+        </div>
+        ` : ""}
+
         <h3 class="section-title" style="margin-top:20px;">Verrouillage</h3>
         <p class="hint" style="margin:0 0 14px;">${isLocked ? "Un code PIN est actuellement demandé à l'ouverture de l'appli." : "Aucun code demandé à l'ouverture. Utile si quelqu'un d'autre peut avoir accès à cet appareil."}</p>
         <button type="button" class="btn btn-outline" id="pinToggleBtn" style="width:100%;justify-content:center;">${isLocked ? "🔓 Désactiver le code PIN" : "🔒 Activer un code PIN (4 chiffres)"}</button>
@@ -1583,6 +1676,18 @@ function openSettingsModal() {
   document.getElementById("replayTutoBtn").onclick = () => { root.innerHTML = ""; showOnboarding(); };
   document.getElementById("exportDataBtn").onclick = () => exportData();
   document.getElementById("exportCSVBtn").onclick = () => exportCSV();
+  const reminderFreq = document.getElementById("reminderFreq");
+  if (reminderFreq) reminderFreq.onchange = () => {
+    state.settings.backupReminder.freq = reminderFreq.value;
+    state.settings.backupReminder.lastPeriod = null; // on repart de zéro : la nouvelle fréquence n'a jamais encore été "montrée"
+    persist("settings");
+    openSettingsModal(); // redessine pour faire apparaître/disparaître le sélecteur "Moment"
+  };
+  const reminderWhen = document.getElementById("reminderWhen");
+  if (reminderWhen) reminderWhen.onchange = () => {
+    state.settings.backupReminder.when = reminderWhen.value;
+    persist("settings");
+  };
   document.getElementById("pinToggleBtn").onclick = async () => {
     if (isLocked) {
       const saisi = prompt("Entre ton code PIN actuel pour désactiver le verrouillage :");
@@ -1812,6 +1917,7 @@ async function loadStateDecrypted(key) {
     try { state[part] = JSON.parse(await decryptString(key, raw)); } catch (e) {}
   }
   if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = "";
+  if (!state.settings.backupReminder) state.settings.backupReminder = { freq: "none", when: "mid", lastPeriod: null };
   if (state.tx.length) { const months = state.tx.map((t) => monthKey(t.date)).sort(); state.month = months[months.length - 1]; }
 }
 // Active le chiffrement : dérive une clé du code PIN actuel, chiffre toutes les données déjà stockées, puis
@@ -1964,7 +2070,9 @@ function bootApp() {
   render();
 
   // Tutoriel : si la clé "onboarded" n'existe pas encore dans le stockage, c'est le tout premier lancement -> on l'affiche
+  // Sinon (appli déjà utilisée), on vérifie si un rappel de sauvegarde est dû pour la période actuelle
   if (!localStorage.getItem(LS_KEYS.onboarded)) showOnboarding();
+  else if (isBackupReminderDue()) showBackupReminder();
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
