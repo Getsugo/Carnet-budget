@@ -627,6 +627,30 @@ function removeCategory(type, cat) {
   persist("cats"); persist("budgets");
 }
 
+// Renomme une catégorie partout où elle est utilisée (type = "depenses" ou "revenus") : liste des catégories,
+// icône personnalisée, budgets prévus de tous les mois, transactions DÉJÀ enregistrées, et transactions récurrentes.
+// Contrairement à la suppression (qui laisse l'historique intact sous l'ancien nom), un renommage doit tout
+// mettre à jour : sinon les anciennes transactions se retrouveraient orphelines sous un nom qui n'existe plus.
+// Renvoie false si le nouveau nom existe déjà (et ne change rien dans ce cas).
+function renameCategory(type, oldCat, newCat) {
+  if (newCat.toLowerCase() === oldCat.toLowerCase()) return true; // rien à faire
+  if (state.cats[type].some((c) => c.toLowerCase() === newCat.toLowerCase())) return false;
+  const txType = type === "depenses" ? "depense" : "revenu";
+  state.cats[type] = state.cats[type].map((c) => (c === oldCat ? newCat : c));
+  if (state.catIcons[oldCat.toLowerCase()] !== undefined) {
+    state.catIcons[newCat.toLowerCase()] = state.catIcons[oldCat.toLowerCase()];
+    delete state.catIcons[oldCat.toLowerCase()];
+  }
+  Object.keys(state.budgets).forEach((mk) => {
+    const b = state.budgets[mk] && state.budgets[mk][type];
+    if (b && b[oldCat] !== undefined) { b[newCat] = b[oldCat]; delete b[oldCat]; }
+  });
+  state.tx.forEach((t) => { if (t.type === txType && t.categorie === oldCat) t.categorie = newCat; });
+  state.recurring.forEach((r) => { if (r.type === txType && r.categorie === oldCat) r.categorie = newCat; });
+  persist("cats"); persist("catIcons"); persist("budgets"); persist("tx"); persist("recurring");
+  return true;
+}
+
 // Fenêtre de création directe d'une catégorie (type = "depenses" ou "revenus") : avant, il fallait passer par
 // l'ajout d'une transaction pour en créer une (en tapant un nom inconnu dans le champ catégorie), ce qui n'était
 // pas évident. Ce bouton permet de créer une catégorie vide directement depuis Budget prévu, sans transaction.
@@ -716,7 +740,7 @@ function renderBudget() {
   const col = (type, list) => list.map((cat) => `
     <div class="budget-row">
       <span class="cat-icon-btn" data-icon-edit="${type}|${esc(cat)}" title="Changer l'icône">${categoryIcon(cat)}</span>
-      <span class="name">${esc(cat)}</span>
+      <span class="name cat-name-btn" data-name-edit="${type}|${esc(cat)}" title="Renommer cette catégorie">${esc(cat)}</span>
       <div class="budget-input-wrap">
         <input type="number" step="0.01" placeholder="0" data-prevu="${type}|${esc(cat)}" value="${(mb[type] || {})[cat] !== undefined ? (mb[type] || {})[cat] : ""}" />
         <span style="color:var(--ink40)">€</span>
@@ -1207,6 +1231,19 @@ function attachViewHandlers() {
         persist("catIcons");
         render();
       }
+    };
+  });
+  // Renommer une catégorie (tape sur son nom, dans Budget prévu) : met à jour tout l'historique, voir renameCategory()
+  document.querySelectorAll("[data-name-edit]").forEach((el) => {
+    el.onclick = () => {
+      const [type, cat] = el.dataset.nameEdit.split("|");
+      const saisi = prompt(`Renommer la catégorie "${cat}" en :`, cat);
+      if (saisi === null) return;
+      const nouveau = saisi.trim().toLowerCase();
+      if (!nouveau) return;
+      const ok = renameCategory(type, cat, nouveau);
+      if (!ok) { alert(`Une catégorie "${nouveau}" existe déjà.`); return; }
+      render();
     };
   });
   const addBtnInline = document.getElementById("addBtnInline");

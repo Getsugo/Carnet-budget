@@ -233,6 +233,9 @@ html[data-theme="light"] .card.dark .sparkline-wrap { border-top-color: var(--li
 
 .budget-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
 .budget-row .name { font-size: 14px; color: var(--ink60); text-transform: capitalize; flex: 1; }
+.cat-name-btn { cursor: pointer; border-radius: 6px; padding: 2px 4px; margin: -2px -4px; transition: background 0.15s ease; }
+.cat-name-btn:active { background: var(--paper-dim); }
+@media (hover: hover) { .cat-name-btn:hover { background: var(--paper-dim); color: var(--ink); } }
 .cat-icon-btn { font-size: 18px; cursor: pointer; line-height: 1; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto; transition: transform 0.15s ease; }
 .cat-icon-btn:active { transform: scale(1.2); }
 .cat-del-btn { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--ink40); font-size: 13px; background: var(--paper-dim); }
