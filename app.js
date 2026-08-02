@@ -1855,7 +1855,7 @@ function openSettingsModal() {
     const result = await enableBiometricEncrypted(saisi.trim());
     if (result === true) alert(`Déverrouillage biométrique activé ! Par sécurité, ton code complet sera quand même redemandé tous les ${FORCE_PIN_EVERY_DAYS} jours, comme les applis bancaires.`);
     else if (result === "wrongpin") alert("Code incorrect.");
-    else alert("Ton appareil ou ton navigateur ne supporte pas encore le déverrouillage biométrique compatible avec le chiffrement (extension WebAuthn PRF absente). Le code PIN reste ta seule option ici.");
+    else alert(`Ton appareil ne supporte pas (encore) ce mode de déverrouillage. Détail technique : ${result}\n\nLe code PIN reste ta seule option ici — rien n'est perdu ni cassé.`);
     openSettingsModal();
   };
   const importDataBtn = document.getElementById("importDataBtn");
@@ -2135,22 +2135,30 @@ async function unwrapDek(pinKey, saltB64, pinTyped) {
 // extension est encore récent et inégal selon les navigateurs/appareils : chaque étape peut échouer proprement,
 // auquel cas le code PIN reste toujours disponible en repli.
 
-// Crée un identifiant biométrique et vérifie que l'extension PRF est bien supportée (sinon renvoie null au
-// lieu d'échouer bruyamment). Déclenche une première demande d'empreinte/Face ID.
+// Crée un identifiant biométrique et vérifie que l'extension PRF est bien supportée. Contrairement à avant,
+// distingue précisément la raison de l'échec (au lieu de tout regrouper sous "non supporté") : ça permet de
+// savoir si le souci vient de la création WebAuthn elle-même, ou du fait que le résultat ne contient pas ce
+// qu'on attend (auquel cas l'appareil/navigateur ne propose pas encore le secret PRF, même s'il gère la biométrie).
 async function createPrfCredential() {
-  const cred = await navigator.credentials.create({
-    publicKey: {
-      challenge: crypto.getRandomValues(new Uint8Array(32)),
-      rp: { name: "Le Carnet" },
-      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "carnet-local", displayName: "Le Carnet" },
-      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
-      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-      extensions: { prf: {} },
-      timeout: 60000,
-    },
-  });
+  let cred;
+  try {
+    cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: "Le Carnet" },
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "carnet-local", displayName: "Le Carnet" },
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+        authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+        extensions: { prf: {} },
+        timeout: 60000,
+      },
+    });
+  } catch (e) {
+    throw new Error(`création WebAuthn refusée (${e.name} : ${e.message})`);
+  }
   const results = cred.getClientExtensionResults();
-  if (!results.prf || !results.prf.enabled) return null;
+  if (!results.prf) throw new Error("le navigateur n'a renvoyé aucun résultat pour l'extension PRF (probablement pas encore implémentée ici)");
+  if (!results.prf.enabled) throw new Error("l'extension PRF est reconnue mais l'authentificateur (empreinte/visage) ne la supporte pas");
   return cred;
 }
 // Récupère le secret PRF pour un identifiant donné (déclenche une demande d'empreinte/Face ID) et le
@@ -2174,7 +2182,8 @@ async function derivePrfKey(credId) {
 // Active le raccourci biométrique EN MODE CHIFFRÉ. Demande le code PIN une fois (pour récupérer la DEK et
 // pouvoir aussi l'envelopper avec la clé biométrique), puis crée l'identifiant PRF — ce qui déclenche deux
 // demandes d'empreinte/Face ID successives (normal, propre au fonctionnement de cette extension).
-// Renvoie true si réussi, "wrongpin" si le code est incorrect, "unsupported" si PRF n'est pas disponible ici.
+// Renvoie true si réussi, "wrongpin" si le code est incorrect, ou le message d'erreur précis sinon
+// (voir createPrfCredential / derivePrfKey pour le détail exact de la cause).
 async function enableBiometricEncrypted(pinTyped) {
   const saltB64 = localStorage.getItem(LS_KEYS.salt);
   if (!saltB64) return "wrongpin";
@@ -2183,12 +2192,11 @@ async function enableBiometricEncrypted(pinTyped) {
   try { dek = await unwrapDek(pinKey, saltB64, pinTyped); } catch (e) { dek = null; }
   if (!dek) return "wrongpin";
   let cred;
-  try { cred = await createPrfCredential(); } catch (e) { cred = null; }
-  if (!cred) return "unsupported";
+  try { cred = await createPrfCredential(); } catch (e) { return e.message; }
   const credId = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
   let prfKey;
-  try { prfKey = await derivePrfKey(credId); } catch (e) { prfKey = null; }
-  if (!prfKey) return "unsupported";
+  try { prfKey = await derivePrfKey(credId); } catch (e) { return `échec lors de la récupération du secret (${e.message})`; }
+  if (!prfKey) return "le secret PRF n'a pas été renvoyé lors de la vérification biométrique";
   const dekB64 = btoa(String.fromCharCode(...dek));
   localStorage.setItem(LS_KEYS.dekWrappedBio, await encryptString(prfKey, dekB64));
   localStorage.setItem(LS_KEYS.biometric, credId);
