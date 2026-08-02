@@ -1,6 +1,6 @@
 /* ---------- Constantes ---------- */
 // Clés utilisées pour sauvegarder chaque partie des données dans le stockage du téléphone (localStorage)
-const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin", biometric: "carnet:biometric", salt: "carnet:salt", verify: "carnet:verify", encOn: "carnet:encOn", dekWrappedPin: "carnet:dekwp", dekWrappedBio: "carnet:dekwb", lastPinAuth: "carnet:lastpinauth" };
+const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin", biometric: "carnet:biometric", salt: "carnet:salt", verify: "carnet:verify", encOn: "carnet:encOn", dekWrappedPin: "carnet:dekwp" };
 // Catégories fournies par défaut au tout premier lancement de l'appli (l'utilisateur peut les modifier/supprimer ensuite)
 const DEFAULT_CATS = {
   depenses: ["courses", "loisirs", "voiture", "gasoil", "salle", "cadeaux", "groupama", "resto", "canal", "maman", "autres"],
@@ -1749,8 +1749,7 @@ function openSettingsModal() {
         <button type="button" class="btn btn-outline" id="bioToggleBtn" style="width:100%;justify-content:center;">${localStorage.getItem(LS_KEYS.biometric) ? "🔓 Désactiver la biométrie" : "👆 Activer le déverrouillage biométrique"}</button>
         ` : ""}
         ${isLocked && isEncrypted ? `
-        <p class="hint" style="margin:14px 0 10px;">${localStorage.getItem(LS_KEYS.dekWrappedBio) ? `Le déverrouillage par empreinte/Face ID est activé, avec une vraie clé fournie par ta puce sécurisée (pas juste une confirmation). Ton code complet reste redemandé tous les ${FORCE_PIN_EVERY_DAYS} jours, comme les applis bancaires.` : "En plus du code, tu peux ajouter un raccourci empreinte/Face ID compatible avec le chiffrement — si ton appareil le permet (support encore inégal selon les navigateurs)."}</p>
-        <button type="button" class="btn btn-outline" id="bioPrfToggleBtn" style="width:100%;justify-content:center;">${localStorage.getItem(LS_KEYS.dekWrappedBio) ? "🔓 Désactiver la biométrie" : "👆 Activer le déverrouillage biométrique"}</button>
+        <p class="hint" style="margin:14px 0 10px;">Le raccourci empreinte/Face ID n'est pas proposé quand le chiffrement est actif : sur la plupart des téléphones (Android via Chrome, notamment), le navigateur ne fournit pas encore la brique technique nécessaire pour que la biométrie donne une vraie clé de déchiffrement, plutôt qu'une simple confirmation. Le code PIN reste ta seule option ici.</p>
         ` : ""}
         ${isLocked ? `
         <p class="hint" style="margin:14px 0 10px;">${isEncrypted ? "🔐 Tes données sont chiffrées (AES-256) : illisibles pour qui fouillerait le stockage technique du navigateur, même sans passer par l'appli." : "Renforce la protection : chiffre aussi tes données elles-mêmes avec ce code (pas juste l'écran d'accueil). Désactive le raccourci biométrique, qui ne peut pas fournir la clé de déchiffrement."}</p>
@@ -1840,23 +1839,6 @@ function openSettingsModal() {
       if (ok) alert("Déverrouillage biométrique activé !");
       openSettingsModal();
     }
-  };
-  const bioPrfToggleBtn = document.getElementById("bioPrfToggleBtn");
-  if (bioPrfToggleBtn) bioPrfToggleBtn.onclick = async () => {
-    if (localStorage.getItem(LS_KEYS.dekWrappedBio)) {
-      disableBiometric();
-      alert("Déverrouillage biométrique désactivé (le code PIN reste actif).");
-      openSettingsModal();
-      return;
-    }
-    const saisi = prompt("Entre ton code PIN pour activer la biométrie :");
-    if (saisi === null) return;
-    bioPrfToggleBtn.textContent = "Vérification en cours… (1 à 2 demandes d'empreinte/Face ID vont s'afficher)";
-    const result = await enableBiometricEncrypted(saisi.trim());
-    if (result === true) alert(`Déverrouillage biométrique activé ! Par sécurité, ton code complet sera quand même redemandé tous les ${FORCE_PIN_EVERY_DAYS} jours, comme les applis bancaires.`);
-    else if (result === "wrongpin") alert("Code incorrect.");
-    else alert(`Ton appareil ne supporte pas (encore) ce mode de déverrouillage. Détail technique : ${result}\n\nLe code PIN reste ta seule option ici — rien n'est perdu ni cassé.`);
-    openSettingsModal();
   };
   const importDataBtn = document.getElementById("importDataBtn");
   const importDataFileInput = document.getElementById("importDataFile");
@@ -1969,7 +1951,7 @@ async function enableBiometric() {
   }
 }
 // Désactive le raccourci biométrique (le code PIN continue de fonctionner normalement)
-function disableBiometric() { localStorage.removeItem(LS_KEYS.biometric); localStorage.removeItem(LS_KEYS.dekWrappedBio); }
+function disableBiometric() { localStorage.removeItem(LS_KEYS.biometric); }
 // Déclenche la demande d'empreinte/Face ID pour déverrouiller l'appli. Comme c'est une appli 100% locale
 // sans serveur pour vérifier la signature cryptographique, on considère que la cérémonie WebAuthn qui réussit
 // (sans exception) est une preuve suffisante que l'appareil a validé la biométrie — c'est le système qui a fait la vérification.
@@ -2004,8 +1986,6 @@ async function tryBiometricUnlock() {
 // ajouter ou retirer un moyen d'accès (ex : activer la biométrie plus tard).
 let sessionKey = null; // la clé de DONNÉES (DEK) une fois déverrouillée -- jamais dérivée directement du PIN
 const ENC_PARTS = ["tx", "budgets", "settings", "cats", "assets", "catIcons", "recurring"];
-const FORCE_PIN_EVERY_DAYS = 14; // même avec la biométrie active, on redemande le vrai code de temps en temps (comme les applis bancaires)
-const PRF_EVAL_INFO = new TextEncoder().encode("le-carnet-dek-wrap-v1"); // "sel" fixe (pas secret) qui distingue cet usage de l'extension PRF
 
 // Transforme un code PIN en une clé AES-256, via PBKDF2 (150 000 itérations : ça ralentit volontairement
 // chaque tentative, pour rendre un essai "à l'aveugle" de toutes les combinaisons plus coûteux).
@@ -2065,7 +2045,6 @@ async function enableEncryption() {
   localStorage.setItem(LS_KEYS.dekWrappedPin, await encryptString(pinKey, dekB64));
   localStorage.setItem(LS_KEYS.salt, saltB64);
   localStorage.setItem(LS_KEYS.encOn, "1");
-  localStorage.setItem(LS_KEYS.lastPinAuth, new Date().toISOString().slice(0, 10));
   localStorage.removeItem(LS_KEYS.pin);
   localStorage.removeItem(LS_KEYS.verify); // ancien repère, plus utilisé avec ce schéma
   disableBiometric();
@@ -2089,7 +2068,6 @@ async function disableEncryption(pinTyped) {
   }
   localStorage.removeItem(LS_KEYS.salt);
   localStorage.removeItem(LS_KEYS.dekWrappedPin);
-  localStorage.removeItem(LS_KEYS.lastPinAuth);
   localStorage.removeItem(LS_KEYS.encOn);
   disableBiometric();
   localStorage.setItem(LS_KEYS.pin, pinTyped);
@@ -2127,118 +2105,19 @@ async function unwrapDek(pinKey, saltB64, pinTyped) {
   return dek;
 }
 
-/* ---------- Biométrie liée au chiffrement (extension WebAuthn "PRF") ---------- */
-// Contrairement au raccourci biométrique "simple" (une confirmation qui ne prouve rien de cryptographique),
-// l'extension PRF de WebAuthn permet de tirer un vrai secret de la puce sécurisée du téléphone (Secure Enclave
-// / Android Keystore), gardé à l'intérieur d'elle et jamais accessible sans passer par le capteur. C'est ce
-// secret qui sert à envelopper la DEK, exactement comme le fait une appli bancaire. Le support de cette
-// extension est encore récent et inégal selon les navigateurs/appareils : chaque étape peut échouer proprement,
-// auquel cas le code PIN reste toujours disponible en repli.
-
-// Crée un identifiant biométrique et vérifie que l'extension PRF est bien supportée. Contrairement à avant,
-// distingue précisément la raison de l'échec (au lieu de tout regrouper sous "non supporté") : ça permet de
-// savoir si le souci vient de la création WebAuthn elle-même, ou du fait que le résultat ne contient pas ce
-// qu'on attend (auquel cas l'appareil/navigateur ne propose pas encore le secret PRF, même s'il gère la biométrie).
-async function createPrfCredential() {
-  let cred;
-  try {
-    cred = await navigator.credentials.create({
-      publicKey: {
-        challenge: crypto.getRandomValues(new Uint8Array(32)),
-        rp: { name: "Le Carnet" },
-        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "carnet-local", displayName: "Le Carnet" },
-        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
-        authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-        extensions: { prf: {} },
-        timeout: 60000,
-      },
-    });
-  } catch (e) {
-    throw new Error(`création WebAuthn refusée (${e.name} : ${e.message})`);
-  }
-  const results = cred.getClientExtensionResults();
-  if (!results.prf) throw new Error("le navigateur n'a renvoyé aucun résultat pour l'extension PRF (probablement pas encore implémentée ici)");
-  if (!results.prf.enabled) throw new Error("l'extension PRF est reconnue mais l'authentificateur (empreinte/visage) ne la supporte pas");
-  return cred;
-}
-// Récupère le secret PRF pour un identifiant donné (déclenche une demande d'empreinte/Face ID) et le
-// transforme en clé AES-256 utilisable pour envelopper/déballer la DEK.
-async function derivePrfKey(credId) {
-  const idBytes = Uint8Array.from(atob(credId), (c) => c.charCodeAt(0));
-  const assertion = await navigator.credentials.get({
-    publicKey: {
-      challenge: crypto.getRandomValues(new Uint8Array(32)),
-      allowCredentials: [{ id: idBytes, type: "public-key" }],
-      userVerification: "required",
-      extensions: { prf: { eval: { first: PRF_EVAL_INFO } } },
-      timeout: 60000,
-    },
-  });
-  const results = assertion.getClientExtensionResults();
-  const prfBytes = results.prf && results.prf.results && results.prf.results.first;
-  if (!prfBytes) return null;
-  return importAesKey(new Uint8Array(prfBytes).slice(0, 32));
-}
-// Active le raccourci biométrique EN MODE CHIFFRÉ. Demande le code PIN une fois (pour récupérer la DEK et
-// pouvoir aussi l'envelopper avec la clé biométrique), puis crée l'identifiant PRF — ce qui déclenche deux
-// demandes d'empreinte/Face ID successives (normal, propre au fonctionnement de cette extension).
-// Renvoie true si réussi, "wrongpin" si le code est incorrect, ou le message d'erreur précis sinon
-// (voir createPrfCredential / derivePrfKey pour le détail exact de la cause).
-async function enableBiometricEncrypted(pinTyped) {
-  const saltB64 = localStorage.getItem(LS_KEYS.salt);
-  if (!saltB64) return "wrongpin";
-  const pinKey = await deriveKeyFromPin(pinTyped, saltB64);
-  let dek;
-  try { dek = await unwrapDek(pinKey, saltB64, pinTyped); } catch (e) { dek = null; }
-  if (!dek) return "wrongpin";
-  let cred;
-  try { cred = await createPrfCredential(); } catch (e) { return e.message; }
-  const credId = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
-  let prfKey;
-  try { prfKey = await derivePrfKey(credId); } catch (e) { return `échec lors de la récupération du secret (${e.message})`; }
-  if (!prfKey) return "le secret PRF n'a pas été renvoyé lors de la vérification biométrique";
-  const dekB64 = btoa(String.fromCharCode(...dek));
-  localStorage.setItem(LS_KEYS.dekWrappedBio, await encryptString(prfKey, dekB64));
-  localStorage.setItem(LS_KEYS.biometric, credId);
-  return true;
-}
-// Déverrouille via biométrie en mode chiffré : récupère le secret PRF, déballe la DEK, et charge les données.
-async function tryBiometricUnlockEncrypted() {
-  const credId = localStorage.getItem(LS_KEYS.biometric);
-  const wrapped = localStorage.getItem(LS_KEYS.dekWrappedBio);
-  if (!credId || !wrapped) return false;
-  try {
-    const prfKey = await derivePrfKey(credId);
-    if (!prfKey) return false;
-    const dekB64 = await decryptString(prfKey, wrapped);
-    const dek = Uint8Array.from(atob(dekB64), (c) => c.charCodeAt(0));
-    sessionKey = await importAesKey(dek);
-    await loadStateDecrypted(sessionKey);
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
 /* ---------- Verrouillage par code PIN ---------- */
 // Au démarrage : si un PIN a été configuré (voir openSettingsModal), on bloque l'accès derrière un écran de saisie
 // avant de démarrer l'appli. Si en plus le chiffrement est actif, les données ne sont même pas chargées en mémoire
-// tant que le bon code (ou la bonne biométrie) n'a pas débloqué la DEK. Si un raccourci biométrique compatible
-// est configuré, il est proposé en premier (sauf ré-authentification forcée périodique), PIN toujours en repli.
+// tant que le bon code n'a pas débloqué la DEK (voir plus haut pourquoi la biométrie n'est pas proposée dans ce cas).
 function checkPinLock(encOn) {
   const pinPlain = localStorage.getItem(LS_KEYS.pin);
   if (!encOn && !pinPlain) { bootApp(); return; }
   if (!encOn) {
     const bioId = localStorage.getItem(LS_KEYS.biometric);
-    if (bioId) paintLockBiometric(); else paintLockPin(false, false);
+    if (bioId) paintLockBiometric(); else paintLockPin(false);
     return;
   }
-  const bioReady = !!localStorage.getItem(LS_KEYS.dekWrappedBio);
-  const lastAuth = localStorage.getItem(LS_KEYS.lastPinAuth);
-  const daysSince = lastAuth ? (Date.now() - new Date(lastAuth + "T00:00:00").getTime()) / 86400000 : Infinity;
-  const forceReauth = daysSince >= FORCE_PIN_EVERY_DAYS;
-  if (bioReady && !forceReauth) paintLockBiometricEncrypted();
-  else paintLockPin(true, forceReauth);
+  paintLockPin(true);
 }
 // Écran de verrouillage : étape biométrique EN MODE NORMAL (pas de chiffrement) — simple confirmation, sans
 // lien cryptographique avec des données (elles sont déjà en clair de toute façon dans ce mode).
@@ -2262,48 +2141,18 @@ function paintLockBiometric() {
     else document.getElementById("lockError").textContent = "Échec — réessaie ou utilise le code PIN.";
   };
   document.getElementById("bioUnlockBtn").onclick = tryBio;
-  document.getElementById("useCodeInstead").onclick = () => paintLockPin(false, false);
-}
-// Écran de verrouillage : étape biométrique EN MODE CHIFFRÉ — cette fois la biométrie fournit vraiment la
-// clé (via PRF), pas juste une confirmation.
-function paintLockBiometricEncrypted() {
-  document.getElementById("lockRoot").innerHTML = `
-    <div class="onboarding-backdrop">
-      <div class="onboarding-card">
-        <div class="onboarding-icon">🔒</div>
-        <h3 class="onboarding-title">Appli verrouillée</h3>
-        <p class="onboarding-text">Déverrouille avec ton empreinte ou Face ID.</p>
-        <button type="button" class="btn btn-solid" id="bioUnlockBtn" style="width:100%;justify-content:center;">👆 Déverrouiller</button>
-        <div id="lockError" class="lock-error"></div>
-        <button type="button" class="link-btn" id="useCodeInstead" style="width:100%;margin-top:14px;text-align:center;">Utiliser le code PIN à la place</button>
-      </div>
-    </div>
-  `;
-  const tryBio = async () => {
-    document.getElementById("lockError").textContent = "";
-    const ok = await tryBiometricUnlockEncrypted();
-    if (ok) {
-      applyTheme(); // le thème par défaut était affiché jusqu'ici (vrais réglages pas encore déchiffrés) -> on corrige immédiatement
-      document.getElementById("lockRoot").innerHTML = "";
-      bootApp();
-    } else {
-      document.getElementById("lockError").textContent = "Échec — réessaie ou utilise le code PIN.";
-    }
-  };
-  document.getElementById("bioUnlockBtn").onclick = tryBio;
-  document.getElementById("useCodeInstead").onclick = () => paintLockPin(true, false);
+  document.getElementById("useCodeInstead").onclick = () => paintLockPin(false);
 }
 // Écran de verrouillage : étape code PIN. En mode normal, comparaison directe au code stocké.
 // En mode chiffré, le code tapé sert à déballer la DEK (voir unwrapDek, gère aussi la migration silencieuse
-// depuis l'ancien schéma de chiffrement si besoin) ; si ça réussit, les vraies données sont déchiffrées dans
-// la foulée. "forceReauth" affiche un message explicatif quand ce n'est pas un simple premier écran.
-function paintLockPin(encOn, forceReauth) {
+// depuis l'ancien schéma de chiffrement si besoin) ; si ça réussit, les vraies données sont déchiffrées dans la foulée.
+function paintLockPin(encOn) {
   document.getElementById("lockRoot").innerHTML = `
     <div class="onboarding-backdrop">
       <div class="onboarding-card">
         <div class="onboarding-icon">🔒</div>
         <h3 class="onboarding-title">Appli verrouillée</h3>
-        <p class="onboarding-text">${forceReauth ? "Pour ta sécurité, ton code complet est redemandé de temps en temps, même avec l'empreinte activée." : "Entre ton code PIN pour continuer."}</p>
+        <p class="onboarding-text">Entre ton code PIN pour continuer.</p>
         <input type="password" inputmode="numeric" maxlength="4" id="lockInput" class="lock-input" autofocus />
         <div id="lockError" class="lock-error"></div>
         <button type="button" class="btn btn-solid" id="lockSubmit" style="width:100%;justify-content:center;margin-top:14px;">Déverrouiller</button>
@@ -2325,7 +2174,6 @@ function paintLockPin(encOn, forceReauth) {
       if (!dek) throw new Error("mauvais code");
       sessionKey = await importAesKey(dek);
       await loadStateDecrypted(sessionKey);
-      localStorage.setItem(LS_KEYS.lastPinAuth, new Date().toISOString().slice(0, 10)); // remet à zéro le délai avant la prochaine ré-authentification forcée
       applyTheme();
       document.getElementById("lockRoot").innerHTML = "";
       bootApp();
