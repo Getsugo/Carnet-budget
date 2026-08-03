@@ -28,7 +28,7 @@ function categoryIcon(cat) {
 let state = {
   tx: [], // liste de toutes les transactions : {id, type: "depense"|"revenu", date, montant, description, categorie}
   budgets: {}, // budget prévu par mois : { "2026-07": { depenses: {courses: 250, ...}, revenus: {...} } }
-  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "", theme: "dark", goalCelebrated: false, backupReminder: { freq: "none", when: "mid", lastPeriod: null } }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible, thème clair/sombre, si le feu d'artifice de l'objectif a déjà été joué, rappel de sauvegarde périodique)
+  settings: { objectif: 60000, soldeInitial: 0, dateObjectif: "", theme: "dark", goalCelebrated: false, nearGoalPct: 15, nearGoalNotified: false, backupReminder: { freq: "none", when: "mid", lastPeriod: null } }, // réglages généraux (objectif d'épargne, solde de départ du compte, date cible, thème clair/sombre, si le feu d'artifice de l'objectif a déjà été joué, seuil et flag du rappel "presque atteint", rappel de sauvegarde périodique)
   cats: JSON.parse(JSON.stringify(DEFAULT_CATS)), // liste des catégories existantes (copie pour ne pas modifier DEFAULT_CATS par erreur)
   catIcons: {}, // surcharge des icônes par catégorie choisie par l'utilisateur : { "courses": "🥖" }
   assets: [], // comptes/livrets/investissements saisis manuellement : {id, nom, montant}
@@ -83,6 +83,8 @@ function loadState() {
   try { const v = localStorage.getItem(LS_KEYS.recurring); if (v) state.recurring = JSON.parse(v); } catch (e) {}
   if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = ""; // rétrocompatibilité si le réglage n'existait pas encore
   if (!state.settings.backupReminder) state.settings.backupReminder = { freq: "none", when: "mid", lastPeriod: null }; // idem
+  if (state.settings.nearGoalPct === undefined) state.settings.nearGoalPct = 15;
+  if (state.settings.nearGoalNotified === undefined) state.settings.nearGoalNotified = false;
   // Au démarrage, on se place automatiquement sur le mois de la transaction la plus récente (plutôt que le mois calendaire actuel)
   if (state.tx.length) { const months = state.tx.map((t) => monthKey(t.date)).sort(); state.month = months[months.length - 1]; }
 }
@@ -274,7 +276,31 @@ function render() {
   view.classList.add("view-anim");
   attachViewHandlers();
   animateCounts();
+  checkNearGoal();
   checkGoalCelebration();
+}
+
+// Vérifie si le patrimoine est entré dans la zone "presque atteint" (à moins de X% de l'objectif, X étant
+// réglable dans Année & objectif) sans l'avoir encore atteint complètement, et affiche un petit message une
+// seule fois. Même principe que checkGoalCelebration ci-dessus, en plus discret (pas de confettis, l'objectif
+// n'est pas encore vraiment atteint).
+function checkNearGoal() {
+  const objectif = Number(state.settings.objectif) || 0;
+  if (objectif <= 0) return;
+  const patrimoine = getPatrimoineTotal();
+  const pct = (patrimoine / objectif) * 100;
+  const seuil = Number(state.settings.nearGoalPct) || 15;
+  const inZone = pct >= (100 - seuil) && pct < 100;
+  if (inZone && !state.settings.nearGoalNotified) {
+    state.settings.nearGoalNotified = true;
+    persist("settings");
+    const manque = objectif - patrimoine;
+    showToast(`🎯 Encore ${fmtEUR(manque)} et ton objectif d'épargne est atteint !`);
+    hapticTap();
+  } else if (!inZone && state.settings.nearGoalNotified) {
+    state.settings.nearGoalNotified = false;
+    persist("settings");
+  }
 }
 
 // Vérifie si l'objectif d'épargne (patrimoine total) vient d'être atteint pour la première fois, et déclenche
@@ -956,8 +982,13 @@ function renderAnnee() {
           <label>Solde de départ du compte courant (€)</label>
           <input type="number" id="setSolde" value="${state.settings.soldeInitial}" />
         </div>
+        <div class="field">
+          <label>Rappel "presque atteint" (%)</label>
+          <input type="number" id="setNearGoalPct" min="1" max="50" value="${state.settings.nearGoalPct}" />
+        </div>
       </div>
       <p class="hint" style="margin-top:14px;">Le compte courant est calculé automatiquement : solde de départ + somme de tous les revenus et dépenses enregistrés. Le patrimoine total additionne ce compte courant et les comptes que tu ajoutes toi-même ci-dessus.</p>
+      <p class="hint" style="margin-top:6px;">Un message s'affichera une fois quand il te restera moins de ce pourcentage à atteindre pour ton objectif (ex : 15% = prévenu quand tu es à 85% ou plus).</p>
     </div>
   `;
 }
@@ -1280,6 +1311,14 @@ function attachViewHandlers() {
   const setDateObjectif = document.getElementById("setDateObjectif");
   syncDateDisplay("setDateObjectif", "setDateObjectifDisplay", "month");
   if (setObjectif) setObjectif.onchange = () => { state.settings.objectif = parseFloat(setObjectif.value) || 0; persist("settings"); render(); };
+  const setNearGoalPct = document.getElementById("setNearGoalPct");
+  if (setNearGoalPct) setNearGoalPct.onchange = () => {
+    const v = Math.min(50, Math.max(1, parseFloat(setNearGoalPct.value) || 15));
+    state.settings.nearGoalPct = v;
+    state.settings.nearGoalNotified = false; // un nouveau seuil n'a jamais encore été "montré"
+    persist("settings");
+    render();
+  };
   if (setSolde) setSolde.onchange = () => { state.settings.soldeInitial = parseFloat(setSolde.value) || 0; persist("settings"); render(); };
   if (setDateObjectif) setDateObjectif.onchange = () => { state.settings.dateObjectif = setDateObjectif.value || ""; persist("settings"); render(); };
 
@@ -2020,6 +2059,8 @@ async function loadStateDecrypted(key) {
   }
   if (state.settings.dateObjectif === undefined) state.settings.dateObjectif = "";
   if (!state.settings.backupReminder) state.settings.backupReminder = { freq: "none", when: "mid", lastPeriod: null };
+  if (state.settings.nearGoalPct === undefined) state.settings.nearGoalPct = 15;
+  if (state.settings.nearGoalNotified === undefined) state.settings.nearGoalNotified = false;
   if (state.tx.length) { const months = state.tx.map((t) => monthKey(t.date)).sort(); state.month = months[months.length - 1]; }
 }
 
