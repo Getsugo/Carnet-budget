@@ -629,7 +629,7 @@ function renderTransactions() {
       <button class="btn btn-outline" id="cleanDupBtn" style="flex-shrink:0;">Nettoyer</button>
     </div>` : ""}
     <div id="importErrorBox"></div>
-    <p class="hint">Import automatique reconnu : export <strong>Crédit Agricole</strong> (Date, Libellé, Débit euros, Crédit euros) — catégorisation auto, doublons ignorés automatiquement. Ou format générique : <span class="font-mono">date, montant, description, categorie, type</span>.</p>
+    <p class="hint">Import automatique reconnu : la plupart des exports CSV de banques françaises (Crédit Agricole, BNP Paribas, Société Générale, Caisse d'Épargne, Banque Postale, Boursorama...) — catégorisation auto, doublons ignorés automatiquement. Ou format générique : <span class="font-mono">date, montant, description, categorie, type</span>.</p>
     <div class="tx-filter-bar">
       <input type="text" id="txSearch" class="tx-search" placeholder="🔍 Rechercher (description ou catégorie)" autocomplete="off" value="${esc(txFilterState.query)}" />
       <label class="tx-filter-toggle"><input type="checkbox" id="txAllMonths" ${txFilterState.allMonths ? "checked" : ""} /> Tous les mois</label>
@@ -1465,7 +1465,10 @@ function cleanLibelle(libRaw) {
     const parts = body.split(" - ");
     body = parts[0].replace(/^DE\s+/i, "");
   }
-  body = body.replace(/\s+[A-Z0-9]{6,}\s*$/, "").replace(/\s{2,}/g, " ").trim();
+  // Retire un éventuel code de référence en toute fin de libellé (ex : "X4532109F"), mais seulement s'il
+  // contient au moins un chiffre — sinon un nom de commerçant tout en majuscules comme "CARREFOUR" ou
+  // "SALAIRE" se ferait couper à tort, en le prenant pour un code.
+  body = body.replace(/\s+(?=[A-Z0-9]*\d)[A-Z0-9]{6,}\s*$/, "").replace(/\s{2,}/g, " ").trim();
   return body || first;
 }
 
@@ -1496,17 +1499,28 @@ function removeDuplicates() {
 }
 
 // Lit un fichier CSV importé par l'utilisateur et l'ajoute aux transactions.
-// Deux formats sont reconnus automatiquement :
-// 1) Export Crédit Agricole : préambule + tableau avec colonnes Date/Libellé/Débit euros/Crédit euros
-// 2) Format générique : colonnes date, montant, description, categorie, type
-// Dans les deux cas : catégorisation automatique (format CA), déduplication, et fusion avec les catégories existantes.
+// Formats reconnus automatiquement :
+// 1) Exports bancaires "deux colonnes" (Débit/Crédit séparés) — Crédit Agricole, Société Générale, Banque
+//    Postale, Caisse d'Épargne... la plupart des grandes banques françaises exportent sous cette forme.
+// 2) Exports bancaires "montant signé" (une seule colonne Montant, négatif = dépense) — BNP Paribas,
+//    Boursorama, et beaucoup de néobanques (Revolut, N26...).
+// 3) Format générique : colonnes date, montant, description, categorie, type.
+// La détection des en-têtes accepte plusieurs synonymes (Libellé/Label/Description/Intitulé, Date/Date
+// opération/Date de comptabilisation...) pour s'adapter au vocabulaire propre à chaque banque, plutôt que de
+// ne reconnaître qu'un seul nom de colonne exact.
 function handleImport(file) {
   const box = document.getElementById("importErrorBox");
   box.innerHTML = "";
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const text = String(reader.result);
+      // Détecte l'encodage plutôt que de le forcer : Crédit Agricole exporte en ISO-8859-1/Windows-1252,
+      // mais beaucoup d'autres banques (BNP, Boursorama...) exportent en UTF-8. On essaie l'UTF-8 en mode
+      // strict d'abord (il échoue si les octets ne sont pas du vrai UTF-8 valide) ; sinon on retombe sur
+      // Windows-1252, qui couvre correctement les accents français des exports plus anciens.
+      let text;
+      try { text = new TextDecoder("utf-8", { fatal: true }).decode(reader.result); }
+      catch (e) { text = new TextDecoder("windows-1252").decode(reader.result); }
       const delim = detectDelim(text);
       const rows = tokenizeCSV(text, delim).filter((r) => r.some((c) => c.trim().length > 0));
       if (rows.length === 0) {
@@ -1514,34 +1528,46 @@ function handleImport(file) {
         return;
       }
 
-      // Cherche la ligne d'en-tête réelle (l'export Crédit Agricole a un préambule avant le tableau)
-      let headerIdx = -1, dateKey = -1, libKey = -1, debKey = -1, credKey = -1;
+      // Cherche la ligne d'en-tête réelle (beaucoup d'exports bancaires ont un préambule avant le vrai tableau),
+      // en acceptant plusieurs synonymes de colonnes selon la banque.
+      let headerIdx = -1, dateKey = -1, libKey = -1, debKey = -1, credKey = -1, amtKey = -1;
       for (let i = 0; i < rows.length; i++) {
         const cellsLower = rows[i].map((c) => c.toLowerCase().trim());
-        const dIdx = cellsLower.findIndex((c) => c === "date");
-        const lIdx = cellsLower.findIndex((c) => /libell/.test(c));
-        if (dIdx !== -1 && lIdx !== -1) {
-          headerIdx = i; dateKey = dIdx; libKey = lIdx;
-          debKey = cellsLower.findIndex((c) => /d[ée]bit/.test(c));
-          credKey = cellsLower.findIndex((c) => /cr[ée]dit/.test(c));
+        const dIdx = cellsLower.findIndex((c) => /^date/.test(c));
+        const lIdx = cellsLower.findIndex((c) => /libell|label\b|intitul[ée]|description|^op[ée]ration$/.test(c));
+        if (dIdx === -1 || lIdx === -1) continue;
+        const dbIdx = cellsLower.findIndex((c) => /d[ée]bit/.test(c));
+        const crIdx = cellsLower.findIndex((c) => /cr[ée]dit/.test(c));
+        const amIdx = cellsLower.findIndex((c) => /^montant|^amount/.test(c));
+        if (dbIdx !== -1 || crIdx !== -1 || amIdx !== -1) {
+          headerIdx = i; dateKey = dIdx; libKey = lIdx; debKey = dbIdx; credKey = crIdx; amtKey = amIdx;
           break;
         }
       }
 
       let parsed = [];
-      let isCAFormat = false;
-      if (headerIdx !== -1 && (debKey !== -1 || credKey !== -1)) {
-        isCAFormat = true;
-        const dataRows = rows.slice(headerIdx + 1).filter((r) => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test((r[dateKey] || "").trim()));
+      let bankFormat = null; // "deux-colonnes" | "montant-signe" | null (format générique)
+      if (headerIdx !== -1) {
+        bankFormat = (debKey !== -1 || credKey !== -1) ? "deux-colonnes" : "montant-signe";
+        const dataRows = rows.slice(headerIdx + 1).filter((r) => {
+          const d = (r[dateKey] || "").trim();
+          return /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(d) || /^\d{4}-\d{1,2}-\d{1,2}$/.test(d);
+        });
         parsed = dataRows.map((r) => {
-          const debitRaw = (r[debKey] || "").replace(/[€\s]/g, "").replace(",", ".");
-          const creditRaw = (r[credKey] || "").replace(/[€\s]/g, "").replace(",", ".");
-          const debit = parseFloat(debitRaw) || 0;
-          const credit = parseFloat(creditRaw) || 0;
-          const type = credit > 0 ? "revenu" : "depense";
-          const montant = credit > 0 ? credit : debit;
           const libRaw = r[libKey] || "";
           const flat = libRaw.replace(/\n/g, " ").replace(/\s{2,}/g, " ").trim();
+          const num = (v) => parseFloat(String(v || "").replace(/[€\s]/g, "").replace(",", ".")) || 0;
+          let type, montant;
+          if (bankFormat === "deux-colonnes") {
+            const debit = num(r[debKey]);
+            const credit = num(r[credKey]);
+            type = credit > 0 ? "revenu" : "depense";
+            montant = credit > 0 ? credit : debit;
+          } else {
+            const raw = num(r[amtKey]);
+            type = raw >= 0 ? "revenu" : "depense";
+            montant = Math.abs(raw);
+          }
           return {
             id: uid(),
             date: toISODate(r[dateKey]),
@@ -1555,7 +1581,7 @@ function handleImport(file) {
         const headers = rows[0].map((h) => h.toLowerCase().trim());
         const required = ["date", "montant", "categorie", "type"];
         if (!required.every((r) => headers.includes(r))) {
-          box.innerHTML = `<div class="err-box">⚠ Colonnes non reconnues. Formats acceptés : export Crédit Agricole (Date, Libellé, Débit euros, Crédit euros), ou générique (date, montant, description, categorie, type).</div>`;
+          box.innerHTML = `<div class="err-box">⚠ Colonnes non reconnues. Essaie un export CSV de ta banque (colonnes Date + Libellé + Débit/Crédit ou Montant), ou le format générique : <span class="font-mono">date, montant, description, categorie, type</span>.</div>`;
           return;
         }
         const idx = (name) => headers.indexOf(name);
@@ -1604,15 +1630,20 @@ function handleImport(file) {
       const skipNote = skipped > 0 ? ` (${skipped} doublon(s) ignoré(s))` : "";
       const importBoxAfter = document.getElementById("importErrorBox");
       if (importBoxAfter) {
-        importBoxAfter.innerHTML = isCAFormat
-          ? `<div class="hint" style="color:var(--sage);margin-bottom:12px;">✓ Format Crédit Agricole détecté — ${parsed.length} opération(s) importée(s) avec catégorisation automatique${skipNote}. Vérifie et corrige les catégories si besoin.</div>`
+        const bankMsg = bankFormat === "deux-colonnes"
+          ? "Format bancaire détecté (colonnes Débit/Crédit)"
+          : bankFormat === "montant-signe"
+          ? "Format bancaire détecté (montant signé)"
+          : null;
+        importBoxAfter.innerHTML = bankMsg
+          ? `<div class="hint" style="color:var(--sage);margin-bottom:12px;">✓ ${bankMsg} — ${parsed.length} opération(s) importée(s) avec catégorisation automatique${skipNote}. Vérifie et corrige les catégories si besoin.</div>`
           : `<div class="hint" style="color:var(--sage);margin-bottom:12px;">✓ ${parsed.length} opération(s) importée(s)${skipNote}.</div>`;
       }
     } catch (e) {
       box.innerHTML = `<div class="err-box">⚠ Le fichier n'a pas pu être lu (${esc(e.message || "erreur inconnue")}).</div>`;
     }
   };
-  reader.readAsText(file, "ISO-8859-1");
+  reader.readAsArrayBuffer(file);
 }
 
 /* ---------- Modal d'ajout / édition ---------- */
@@ -1896,7 +1927,7 @@ const ONBOARDING_SLIDES = [
   { icon: "📊", title: "Le tableau de bord", text: "En un coup d'œil : ce qu'il te reste à vivre ce mois-ci, ce que tu as prévu vs réellement dépensé par catégorie, et la répartition de tes dépenses." },
   { icon: "➕", title: "Ajouter une transaction", text: "Le bouton vert « + » ajoute une dépense ou un revenu. Tape ensuite sur n'importe quelle transaction de la liste pour la modifier ou la supprimer." },
   { icon: "🔍", title: "Rechercher et recatégoriser en masse", text: "Dans Transactions, la recherche retrouve toutes les opérations d'un commerçant (ex : « Oxytif »). Si elles sont mal catégorisées, choisis la bonne catégorie dans le bandeau qui apparaît pour toutes les corriger d'un coup — coche « Tous les mois » pour remonter dans tout l'historique." },
-  { icon: "📥", title: "Importer ton relevé bancaire", text: "Toujours dans Transactions, importe directement le CSV exporté par ta banque (Crédit Agricole reconnu automatiquement) : les catégories se remplissent toutes seules, à toi de corriger si besoin." },
+  { icon: "📥", title: "Importer ton relevé bancaire", text: "Toujours dans Transactions, importe directement le CSV exporté par ta banque (la plupart des grandes banques françaises sont reconnues automatiquement) : les catégories se remplissent toutes seules, à toi de corriger si besoin." },
   { icon: "🎯", title: "Budget prévu", text: "Fixe un montant prévu par catégorie. Tape sur l'icône d'une catégorie pour changer son emoji, ou sur le ✕ pour la supprimer. Un tableau compare aussi tes dépenses réelles sur les 6 derniers mois." },
   { icon: "🔁", title: "Transactions récurrentes", text: "Toujours dans Budget prévu : configure une fois ton loyer, tes abonnements ou ton salaire, et ils se recréeront automatiquement chaque mois, au jour indiqué." },
   { icon: "💰", title: "Année & objectif", text: "Suis ton reste par mois sur toute l'année, ton patrimoine total (comptes ajoutés à la main + compte courant automatique), et fixe un objectif d'épargne avec une date." },
