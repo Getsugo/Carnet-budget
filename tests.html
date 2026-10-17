@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Le Carnet — Tests</title>
+<style>
+  :root { --bg: #0A0E14; --ink: #E6E9EF; --muted: #8A93A3; --ok: #37D399; --ko: #FB7A8A; --line: #1E2633; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 0 0 16px; }
+  #summary { font-weight: 700; padding: 12px; border-radius: 10px; margin-bottom: 16px; background: var(--line); }
+  #summary.ok { color: var(--ok); } #summary.ko { color: var(--ko); }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  li .err { display: block; color: var(--ko); font-size: 13px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Le Carnet — tests automatiques</h1>
+<p>Vérifie les fonctions importantes de l'appli avant chaque publication. Les tests travaillent sur un stockage
+temporaire en mémoire : tes vraies données ne sont jamais lues ni modifiées.</p>
+<div id="summary">Tests en cours…</div>
+<ul id="results"></ul>
+
+<script>
+// 1) Stockage temporaire en mémoire, installé AVANT de charger l'appli : tout ce que l'appli croit écrire dans
+//    son stockage habituel atterrit ici, et disparaît en fermant la page.
+(function () {
+  const mem = new Map();
+  const fake = {
+    getItem: (k) => (mem.has(String(k)) ? mem.get(String(k)) : null),
+    setItem: (k, v) => { mem.set(String(k), String(v)); },
+    removeItem: (k) => { mem.delete(String(k)); },
+    clear: () => mem.clear(),
+    key: (i) => [...mem.keys()][i] ?? null,
+    get length() { return mem.size; },
+  };
+  try { Object.defineProperty(window, "localStorage", { value: fake, configurable: true }); } catch (e) {}
+  window.CARNET_TEST_SAFE = window.localStorage === fake;
+  window.CARNET_TEST_MODE = true; // l'appli se charge sans démarrer
+})();
+if (!window.CARNET_TEST_SAFE) {
+  // Par sécurité : si le stockage temporaire n'a pas pu être installé, on ne charge pas l'appli du tout
+  document.getElementById("summary").textContent = "⛔ Tests arrêtés : impossible d'isoler le stockage (tes données ne sont pas touchées).";
+  document.getElementById("summary").className = "ko";
+} else {
+  document.write('<script src="app.js"><\/script>');
+}
+</script>
+
+<script>
+if (window.CARNET_TEST_SAFE) (async () => {
+  const tests = [];
+  const test = (name, fn) => tests.push({ name, fn });
+  const eq = (a, b, msg) => { const A = JSON.stringify(a), B = JSON.stringify(b); if (A !== B) throw new Error(`${msg || "valeur inattendue"}\n  obtenu : ${A}\n  attendu : ${B}`); };
+  const ok = (cond, msg) => { if (!cond) throw new Error(msg || "condition fausse"); };
+  const DEFAULTS = JSON.stringify(state);
+  const reset = () => { localStorage.clear(); state = JSON.parse(DEFAULTS); sessionKey = null; pinTooShort = false; };
+
+  /* ---------- Dates ---------- */
+  test("Date du jour en heure locale (00:30 le 1er janvier = 1er janvier, pas la veille)", () => {
+    eq(localISODate(new Date(2026, 0, 1, 0, 30)), "2026-01-01");
+    eq(localISODate(new Date(2026, 11, 31, 23, 59)), "2026-12-31");
+  });
+  test("Affichage des dates au format français", () => {
+    eq(fmtDateFR("2026-03-05"), "05/03/2026");
+    eq(fmtDateFR(""), "");
+  });
+
+  /* ---------- Transactions récurrentes ---------- */
+  test("Récurrentes : mois manqués rattrapés, règle neuve = mois en cours seulement", () => {
+    eq(recurringMonthsToApply("2026-07", "2026-10"), ["2026-08", "2026-09", "2026-10"]);
+    eq(recurringMonthsToApply("2025-11", "2026-02"), ["2025-12", "2026-01", "2026-02"]);
+    eq(recurringMonthsToApply(null, "2026-10"), ["2026-10"]);
+    eq(recurringMonthsToApply("n'importe quoi", "2026-10"), ["2026-10"]);
+    eq(recurringMonthsToApply("2010-01", "2026-10").length, RECURRING_MAX_CATCHUP);
+  });
+  test("Récurrentes : jour ramené au dernier jour des mois courts", () => {
+    eq(recurringDate("2026-02", 31), "2026-02-28");
+    eq(recurringDate("2028-02", 31), "2028-02-29");
+    eq(recurringDate("2026-04", 31), "2026-04-30");
+    eq(recurringDate("2026-10", 15), "2026-10-15");
+  });
+  test("Récurrentes : génération réelle sans doublon à la 2e ouverture", () => {
+    reset();
+    const cur = localISODate().slice(0, 7);
+    const [y, m] = cur.split("-").map(Number);
+    const twoBefore = m > 2 ? `${y}-${String(m - 2).padStart(2, "0")}` : `${y - 1}-${String(m + 10).padStart(2, "0")}`;
+    state.recurring = [{ id: "r1", type: "depense", description: "Loyer", categorie: "logement", montant: 500, jour: 31, dernierMoisApplique: twoBefore }];
+    applyRecurringTransactions();
+    eq(state.tx.length, 2, "2 mois à rattraper");
+    eq(state.recurring[0].dernierMoisApplique, cur);
+    applyRecurringTransactions();
+    eq(state.tx.length, 2, "aucune nouvelle transaction à la 2e ouverture");
+  });
+
+  /* ---------- Calculs ---------- */
+  test("Patrimoine : la transaction du dernier jour du mois est comptée", () => {
+    reset();
+    state.settings.soldeInitial = 100;
+    state.assets = [{ id: "a", nom: "Livret", montant: 50 }];
+    state.tx = [{ id: "t", type: "revenu", date: "2026-01-31", montant: 10, description: "", categorie: "salaire" }];
+    eq(getPatrimoineSeries().find((p) => p.mois === "2026-01").total, 160);
+  });
+
+  /* ---------- Sécurité de l'affichage ---------- */
+  test("Icône piégée neutralisée avant affichage", () => {
+    reset();
+    state.catIcons.test = '<img src=x onerror=alert(1)>';
+    ok(!categoryIcon("test").includes("<"), "le < doit être échappé");
+    eq(categoryIconRaw("test"), '<img src=x onerror=alert(1)>');
+    eq(esc(`"'&<>`), "&quot;&#39;&amp;&lt;&gt;");
+  });
+
+  /* ---------- Import / export ---------- */
+  test("Import : fichier invalide refusé", () => {
+    eq(sanitizeBackup({}), null);
+    eq(sanitizeBackup([]), null);
+    eq(sanitizeBackup({ tx: "x" }), null);
+  });
+  test("Import : éléments illisibles écartés, le reste conservé et nettoyé", () => {
+    reset();
+    const c = sanitizeBackup({
+      tx: [
+        { id: "ok", type: "depense", date: "2026-10-01", montant: "12,5", description: "x", categorie: "courses" },
+        { id: "bad", type: "pirate", date: "2026-10-01", montant: 1 },
+        { id: "bad2", type: "depense", date: "2026-13-01", montant: 1 },
+        { id: "bad3", type: "depense", date: "2026-10-01", montant: "abc" },
+        null,
+      ],
+      catIcons: { courses: "🥖", __proto__: { x: 1 } },
+      settings: { theme: "<script>", objectif: "5000" },
+    });
+    eq(c.tx.length, 1); eq(c.tx[0].montant, 12.5); eq(c.dropped, 4);
+    eq(c.settings.theme, "dark"); eq(c.settings.objectif, 5000);
+  });
+  test("Export puis réimport : données strictement identiques (textes longs compris)", async () => {
+    reset();
+    state.tx = [
+      { id: "a1", type: "depense", date: "2026-10-01", montant: 12.34, description: "PRLV SEPA ".repeat(60) + "é€\"<>'&", categorie: "assurance" },
+      { id: "a2", type: "revenu", date: "2026-10-02", montant: 1800, description: "Paie", categorie: "salaire" },
+    ];
+    state.budgets = { "2026-10": { depenses: { courses: 250 }, revenus: { salaire: 1800 } } };
+    state.assets = [{ id: "b1", nom: "Livret A", montant: 1000 }];
+    state.catIcons = { assurance: "🛡️" };
+    state.recurring = [{ id: "r1", type: "depense", description: "Loyer", categorie: "logement", montant: 600, jour: 5, dernierMoisApplique: "2026-10" }];
+    const pick = (s) => JSON.stringify({ tx: s.tx, budgets: s.budgets, cats: s.cats, assets: s.assets, catIcons: s.catIcons, recurring: s.recurring, settings: s.settings });
+    const before = pick(state);
+    const clean = sanitizeBackup(JSON.parse(await buildBackupFile().text()));
+    eq(pick(clean), before);
+  });
+
+  /* ---------- Version vierge ---------- */
+  test("Catégories par défaut : aucune donnée personnelle", () => {
+    const interdits = /groupama|maman|mamy|cpam|wtw|canal|gasoil|oxytif|vitaligym|ankama|viparis|weezevent/i;
+    ok(!interdits.test(JSON.stringify(DEFAULT_CATS) + JSON.stringify(CATEGORY_ICONS)), "nom personnel trouvé dans les catégories par défaut");
+  });
+  test("Tri automatique des imports : chaque catégorie proposée existe", () => {
+    const known = new Set([...DEFAULT_CATS.depenses, ...DEFAULT_CATS.revenus, ...Object.keys(CATEGORY_ICONS)]);
+    [...CATEGORY_RULES_DEP, ...CATEGORY_RULES_REV].forEach(([, cat]) => ok(known.has(cat), `catégorie inconnue : ${cat}`));
+    eq(guessCategory("CB CARREFOUR MARKET", "depense"), "courses");
+    eq(guessCategory("PRLV NETFLIX", "depense"), "abonnements");
+    eq(guessCategory("VIR CAF", "revenu"), "aides");
+    eq(guessCategory("XYZ", "depense"), "autres");
+  });
+
+  /* ---------- Code PIN ---------- */
+  test("PIN : attentes après 5 erreurs (30 s, 1 min, 2 min… 15 min max)", () => {
+    eq([4, 5, 6, 7, 20].map(pinLockDelayMs), [0, 30000, 60000, 120000, 15 * 60000]);
+  });
+  test("PIN : compteur d'erreurs, attente en cours, remise à zéro", () => {
+    reset();
+    const t0 = 1_000_000;
+    for (let i = 0; i < 4; i++) eq(registerPinFail(t0), 0);
+    eq(registerPinFail(t0), 30000);
+    eq(pinLockRemainingMs(t0 + 10000), 20000);
+    eq(pinLockRemainingMs(t0 + 31000), 0);
+    localStorage.setItem(LS_KEYS.pinLockUntil, String(t0 + 999999999)); // horloge aberrante
+    eq(pinLockRemainingMs(t0), 15 * 60000, "attente plafonnée");
+    resetPinFails();
+    eq(getPinFails(), 0); eq(pinLockRemainingMs(t0), 0);
+  });
+  test("PIN : un ancien code à 4 chiffres est signalé comme trop court", () => {
+    reset();
+    localStorage.setItem(LS_KEYS.pin, "1234");
+    ok(isPinTooShort());
+    localStorage.setItem(LS_KEYS.pin, "123456");
+    ok(!isPinTooShort());
+  });
+
+  /* ---------- Chiffrement ---------- */
+  test("Chiffrement : sauvegardes rapprochées enregistrées dans le bon ordre", async () => {
+    reset();
+    const key = await importAesKey(crypto.getRandomValues(new Uint8Array(32)));
+    sessionKey = key;
+    for (let i = 1; i <= 20; i++) { state.tx = Array.from({ length: (21 - i) * 100 }, (_, j) => ({ id: "x" + j })); persist("tx"); }
+    state.tx = [{ id: "final" }]; persist("tx");
+    await flushPersist();
+    eq(JSON.parse(await decryptString(key, localStorage.getItem(LS_KEYS.tx))), [{ id: "final" }]);
+  });
+  test("Chiffrement : activer, changer le code, déverrouiller, désactiver", async () => {
+    reset();
+    localStorage.setItem(LS_KEYS.tx, JSON.stringify([{ id: "t1" }]));
+    localStorage.setItem(LS_KEYS.pin, "1234");
+    ok(await enableEncryption(), "activation");
+    ok(!localStorage.getItem(LS_KEYS.tx).startsWith("["), "données chiffrées");
+    ok(localStorage.getItem(LS_KEYS.pin) === null, "code en clair supprimé");
+    ok(!(await changePin("0000", "482915")), "mauvais ancien code refusé");
+    ok(await changePin("1234", "482915"), "changement de code");
+    const salt = localStorage.getItem(LS_KEYS.salt);
+    const dek = await unwrapDek(await deriveKeyFromPin("482915", salt), salt, "482915");
+    eq(JSON.parse(await decryptString(await importAesKey(dek), localStorage.getItem(LS_KEYS.tx))), [{ id: "t1" }]);
+    let oldWorks = true; try { oldWorks = !!(await unwrapDek(await deriveKeyFromPin("1234", salt), salt, "1234")); } catch (e) { oldWorks = false; }
+    ok(!oldWorks, "l'ancien code ne doit plus marcher");
+    ok(await disableEncryption("482915"), "désactivation");
+    eq(localStorage.getItem(LS_KEYS.tx), JSON.stringify([{ id: "t1" }]));
+  });
+
+  /* ---------- Exécution ---------- */
+  const ul = document.getElementById("results");
+  let passed = 0;
+  for (const t of tests) {
+    const li = document.createElement("li");
+    try { await t.fn(); passed++; li.textContent = "✅ " + t.name; }
+    catch (e) { li.textContent = "❌ " + t.name; const s = document.createElement("span"); s.className = "err"; s.textContent = e && e.message ? e.message : String(e); li.appendChild(s); }
+    ul.appendChild(li);
+  }
+  reset();
+  const summary = document.getElementById("summary");
+  summary.textContent = passed === tests.length ? `✅ ${passed} / ${tests.length} tests réussis` : `❌ ${tests.length - passed} test(s) en échec sur ${tests.length}`;
+  summary.className = passed === tests.length ? "ok" : "ko";
+  window.CARNET_TEST_RESULT = { passed, total: tests.length };
+})();
+</script>
+</body>
+</html>

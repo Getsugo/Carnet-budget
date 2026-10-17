@@ -22,6 +22,7 @@ style.css       le design (thème sombre)
 manifest.json   métadonnées de l'appli installable (nom, icônes, couleurs)
 sw.js           service worker : met les fichiers en cache pour le mode hors-ligne
 icon-*.png      icônes de l'appli à différentes tailles
+tests.html      tests automatiques des fonctions importantes (à ouvrir avant chaque publication)
 ```
 
 Le code est commenté dans `app.js` pour expliquer le rôle de chaque fonction.
@@ -36,9 +37,10 @@ Le code est commenté dans `app.js` pour expliquer le rôle de chaque fonction.
 
 ### Mettre à jour l'appli après une modification
 
-1. Remonter les fichiers modifiés sur GitHub (mêmes noms, ça écrase les anciens)
-2. Dans `sw.js`, incrémenter la valeur de `CACHE_NAME` (ex : `carnet-budget-v10` → `v11`) — c'est ce qui force les appareils à récupérer les nouveaux fichiers au lieu de garder l'ancienne version en cache
-3. Fermer complètement puis rouvrir l'appli installée sur le téléphone
+1. Ouvrir `tests.html` (en local ou sur le site) : tous les tests doivent être ✅
+2. Remonter les fichiers modifiés sur GitHub (mêmes noms, ça écrase les anciens)
+3. Dans `sw.js`, incrémenter la valeur de `CACHE_NAME` (ex : `carnet-budget-v10` → `v11`) — c'est ce qui force les appareils à récupérer les nouveaux fichiers au lieu de garder l'ancienne version en cache
+4. Fermer complètement puis rouvrir l'appli installée sur le téléphone
 
 ## Vie privée : le repo GitHub est-il public ?
 
@@ -61,3 +63,13 @@ Le navigateur alloue en général autour de 5 Mo de `localStorage` par site. Cha
 ## Stack technique
 
 Aucune dépendance externe : HTML, CSS et JavaScript "vanilla" uniquement (pas de framework, pas de build, pas de `node_modules`). L'appli fonctionne en ouvrant simplement `index.html` dans un navigateur, ou en étant servie par n'importe quel hébergeur de fichiers statiques (GitHub Pages, Netlify, etc.).
+
+## Tests automatiques
+
+Ouvrir `tests.html` (par exemple `https://<utilisateur>.github.io/<nom-du-repo>/tests.html`) : la page vérifie les dates, les transactions récurrentes, le patrimoine, l'import/export des sauvegardes, la protection de l'affichage, le code PIN (y compris l'attente après plusieurs erreurs) et le chiffrement. Elle travaille sur un stockage temporaire en mémoire : les vraies données de l'appareil ne sont jamais lues ni modifiées.
+
+## Protection des données
+
+- L'appli demande au navigateur de ne jamais effacer ses données de lui-même (stockage persistant) ; l'état est affiché dans ⚙️ Réglages → Sauvegarde.
+- Le bouton « Envoyer ma sauvegarde » ouvre le menu de partage du téléphone (Drive, mail…) avec le fichier de sauvegarde.
+- Après 5 codes PIN faux, une attente est imposée avant de pouvoir réessayer (30 s, puis 1 min, 2 min… jusqu'à 15 min).

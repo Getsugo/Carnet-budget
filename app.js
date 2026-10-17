@@ -1,6 +1,6 @@
 /* ---------- Constantes ---------- */
 // Clés utilisées pour sauvegarder chaque partie des données dans le stockage du téléphone (localStorage)
-const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin", biometric: "carnet:biometric", salt: "carnet:salt", verify: "carnet:verify", encOn: "carnet:encOn", dekWrappedPin: "carnet:dekwp" };
+const LS_KEYS = { tx: "carnet:tx", budgets: "carnet:budgets", settings: "carnet:settings", cats: "carnet:cats", assets: "carnet:assets", catIcons: "carnet:catIcons", onboarded: "carnet:onboarded", recurring: "carnet:recurring", pin: "carnet:pin", biometric: "carnet:biometric", salt: "carnet:salt", verify: "carnet:verify", encOn: "carnet:encOn", dekWrappedPin: "carnet:dekwp", pinFails: "carnet:pinFails", pinLockUntil: "carnet:pinLockUntil" };
 // Catégories fournies par défaut au tout premier lancement de l'appli (l'utilisateur peut les modifier/supprimer ensuite)
 const DEFAULT_CATS = {
   depenses: ["courses", "logement", "transport", "carburant", "resto", "loisirs", "abonnements", "assurance", "santé", "sport", "cadeaux", "autres"],
@@ -1110,31 +1110,65 @@ function showBackupReminder() {
         <div class="onboarding-icon">💾</div>
         <h3 class="onboarding-title">Petit rappel</h3>
         <p class="onboarding-text">Ça fait un moment — pense à exporter une sauvegarde de tes données, pour les garder en sécurité ou les transférer vers un autre appareil.</p>
-        <button type="button" class="btn btn-solid" id="reminderExportBtn" style="width:100%;justify-content:center;margin-bottom:10px;">⬇ Exporter maintenant</button>
+        <button type="button" class="btn btn-solid" id="reminderExportBtn" style="width:100%;justify-content:center;margin-bottom:10px;">${canShareBackup() ? "📤 Envoyer ma sauvegarde (Drive, mail…)" : "⬇ Exporter maintenant"}</button>
         <button type="button" class="link-btn" id="reminderLaterBtn" style="width:100%;text-align:center;">Plus tard</button>
       </div>
     </div>
   `;
-  document.getElementById("reminderExportBtn").onclick = () => { exportData(); dismiss(); };
+  // Si la personne annule le menu de partage, le rappel reste affiché (rien n'a été sauvegardé)
+  document.getElementById("reminderExportBtn").onclick = async () => { if (await shareBackup()) dismiss(); };
   document.getElementById("reminderLaterBtn").onclick = dismiss;
 }
 
-function exportData() {
+// Prépare le fichier de sauvegarde .json (utilisé par l'export classique et par le partage)
+function buildBackupFile() {
   const payload = {
     _app: "le-carnet", _version: 1, _exportedAt: new Date().toISOString(),
     tx: state.tx, budgets: state.budgets, cats: state.cats, assets: state.assets,
     settings: state.settings, catIcons: state.catIcons, recurring: state.recurring,
   };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
+  return new File([JSON.stringify(payload, null, 2)], `le-carnet-sauvegarde-${localISODate()}.json`, { type: "application/json" });
+}
+function exportData() {
+  const file = buildBackupFile();
+  const url = URL.createObjectURL(file);
   const a = document.createElement("a");
-  const localDate = localISODate();
   a.href = url;
-  a.download = `le-carnet-sauvegarde-${localDate}.json`;
+  a.download = file.name;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+// Le téléphone sait-il partager un fichier (menu de partage Android/iOS : Drive, mail, WhatsApp...) ?
+function canShareBackup() {
+  try { return !!(navigator.canShare && navigator.share && navigator.canShare({ files: [buildBackupFile()] })); } catch (e) { return false; }
+}
+// Ouvre le menu de partage du téléphone avec le fichier de sauvegarde, pour l'envoyer en un geste vers Drive, un
+// mail... Renvoie true si le partage a été fait, false si la personne a annulé. Sans menu de partage
+// (ex : la plupart des PC), on retombe sur le téléchargement classique.
+async function shareBackup() {
+  const file = buildBackupFile();
+  if (!canShareBackup()) { exportData(); return true; }
+  try {
+    await navigator.share({ files: [file], title: "Sauvegarde Le Carnet", text: "Sauvegarde de mes données Le Carnet" });
+    return true;
+  } catch (e) {
+    if (e && e.name === "AbortError") return false; // partage annulé par la personne
+    exportData(); // partage impossible pour une autre raison : on télécharge le fichier à la place
+    return true;
+  }
+}
+
+// Demande au navigateur de ne JAMAIS effacer les données de l'appli de lui-même. Sans ça, quand le téléphone
+// manque de place, le navigateur peut vider le stockage des sites peu utilisés — et donc toutes les transactions.
+// Sur Chrome, l'accord est généralement donné sans rien demander (appli installée ou souvent utilisée).
+async function requestPersistentStorage() {
+  try {
+    if (!navigator.storage || !navigator.storage.persist) return null;
+    if (await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch (e) { return null; }
 }
 
 // Exporte toutes les transactions dans un fichier .csv lisible directement dans Excel/Google Sheets
@@ -1923,7 +1957,9 @@ function openSettingsModal() {
 
         <h3 class="section-title">Sauvegarde</h3>
         <p class="hint" style="margin:0 0 14px;">Tes données restent uniquement sur cet appareil. Pour les retrouver sur un autre téléphone ou un PC, exporte un fichier de sauvegarde ici, transfère-le (mail, drive, clé USB...), puis importe-le sur l'autre appareil.</p>
+        <p class="hint" id="persistStatus" style="margin:0 0 14px;"></p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          ${canShareBackup() ? `<button type="button" class="btn btn-solid" id="shareDataBtn">📤 Envoyer ma sauvegarde (Drive, mail…)</button>` : ""}
           <button type="button" class="btn btn-outline" id="exportDataBtn">⬇ Exporter mes données (.json)</button>
           <button type="button" class="btn btn-outline" id="exportCSVBtn">⬇ Exporter en CSV (Excel)</button>
           <button type="button" class="btn btn-outline" id="importDataBtn">⬆ Importer une sauvegarde</button>
@@ -1984,6 +2020,16 @@ function openSettingsModal() {
   });
   document.getElementById("replayTutoBtn").onclick = () => { root.innerHTML = ""; showOnboarding(); };
   document.getElementById("exportDataBtn").onclick = () => exportData();
+  const shareDataBtn = document.getElementById("shareDataBtn");
+  if (shareDataBtn) shareDataBtn.onclick = () => shareBackup();
+  // Indique si le navigateur a accepté de ne jamais effacer les données de lui-même (voir requestPersistentStorage)
+  requestPersistentStorage().then((ok) => {
+    const el = document.getElementById("persistStatus");
+    if (!el) return;
+    el.textContent = ok === true
+      ? "🔒 Stockage protégé : le navigateur n'effacera pas tes données de lui-même. Une sauvegarde régulière reste utile en cas de perte ou de casse du téléphone."
+      : "⚠️ Le navigateur n'a pas garanti la conservation de tes données (il pourrait les effacer s'il manque de place). Installe l'appli sur l'écran d'accueil et fais des sauvegardes régulières.";
+  });
   document.getElementById("exportCSVBtn").onclick = () => exportCSV();
   const reminderFreq = document.getElementById("reminderFreq");
   if (reminderFreq) reminderFreq.onchange = () => {
@@ -2429,29 +2475,103 @@ function paintLockPin(encOn) {
     </div>
   `;
   const input = document.getElementById("lockInput");
-  const tryUnlock = async () => {
-    const val = input.value.trim();
-    const fail = () => { document.getElementById("lockError").textContent = "Code incorrect, réessaie."; input.value = ""; input.focus(); };
-    if (!encOn) {
-      if (val === localStorage.getItem(LS_KEYS.pin)) { pinTooShort = val.length < PIN_MIN_LENGTH; document.getElementById("lockRoot").innerHTML = ""; bootApp(); }
-      else fail();
-      return;
-    }
-    try {
-      const pinKey = await deriveKeyFromPin(val, localStorage.getItem(LS_KEYS.salt));
-      const dek = await unwrapDek(pinKey, localStorage.getItem(LS_KEYS.salt), val);
-      if (!dek) throw new Error("mauvais code");
-      sessionKey = await importAesKey(dek);
-      pinTooShort = val.length < PIN_MIN_LENGTH;
-      await loadStateDecrypted(sessionKey);
-      applyTheme();
-      document.getElementById("lockRoot").innerHTML = "";
-      bootApp();
-    } catch (e) { fail(); }
+  const submit = document.getElementById("lockSubmit");
+  const errorEl = document.getElementById("lockError");
+  let busy = false; // évite de lancer plusieurs vérifications en même temps (touche Entrée répétée)
+  let timer = null;
+  // Pendant une attente imposée : champ et bouton désactivés, compte à rebours affiché
+  const showWait = () => {
+    clearInterval(timer);
+    const tick = () => {
+      const left = pinLockRemainingMs();
+      if (left <= 0) {
+        clearInterval(timer);
+        input.disabled = false; submit.disabled = false; submit.style.opacity = "";
+        errorEl.textContent = "";
+        input.focus();
+        return;
+      }
+      input.disabled = true; submit.disabled = true; submit.style.opacity = "0.45";
+      errorEl.textContent = `Trop d'essais. Réessaie dans ${fmtWait(left)}.`;
+    };
+    tick();
+    timer = setInterval(tick, 1000);
   };
-  document.getElementById("lockSubmit").onclick = tryUnlock;
+  const succeed = () => { resetPinFails(); clearInterval(timer); document.getElementById("lockRoot").innerHTML = ""; bootApp(); };
+  const fail = () => {
+    const delay = registerPinFail();
+    input.value = "";
+    if (delay > 0) showWait();
+    else {
+      const left = PIN_FREE_ATTEMPTS - getPinFails();
+      errorEl.textContent = left > 0 && left < PIN_FREE_ATTEMPTS ? `Code incorrect, réessaie (encore ${left} essai${left > 1 ? "s" : ""} avant une attente).` : "Code incorrect, réessaie.";
+      input.focus();
+    }
+  };
+  const tryUnlock = async () => {
+    if (busy || pinLockRemainingMs() > 0) return;
+    const val = input.value.trim();
+    if (!val) return;
+    busy = true;
+    try {
+      if (!encOn) {
+        if (val === localStorage.getItem(LS_KEYS.pin)) { pinTooShort = val.length < PIN_MIN_LENGTH; succeed(); }
+        else fail();
+        return;
+      }
+      try {
+        const pinKey = await deriveKeyFromPin(val, localStorage.getItem(LS_KEYS.salt));
+        const dek = await unwrapDek(pinKey, localStorage.getItem(LS_KEYS.salt), val);
+        if (!dek) throw new Error("mauvais code");
+        sessionKey = await importAesKey(dek);
+        pinTooShort = val.length < PIN_MIN_LENGTH;
+        await loadStateDecrypted(sessionKey);
+        applyTheme();
+        succeed();
+      } catch (e) { fail(); }
+    } finally { busy = false; }
+  };
+  submit.onclick = tryUnlock;
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") tryUnlock(); });
-  input.focus();
+  if (pinLockRemainingMs() > 0) showWait(); // attente encore en cours (ex : appli fermée puis rouverte)
+  else input.focus();
+}
+
+// Limitation des essais de code PIN : les PIN_FREE_ATTEMPTS premiers essais ratés sont libres, puis chaque
+// nouvel échec impose une attente qui double (30 s, 1 min, 2 min... jusqu'à 15 min maximum). Le compteur est
+// enregistré : fermer et rouvrir l'appli ne remet pas l'attente à zéro. Un code correct remet tout à zéro.
+// Limite honnête : quelqu'un qui copierait les données chiffrées pour les attaquer hors de l'appli n'est pas
+// concerné par cette attente — c'est le chiffrement (et un code de 6 chiffres ou plus) qui protège dans ce cas.
+const PIN_FREE_ATTEMPTS = 5;
+const PIN_BASE_DELAY_MS = 30 * 1000;
+const PIN_MAX_DELAY_MS = 15 * 60 * 1000;
+function pinLockDelayMs(fails) {
+  if (fails < PIN_FREE_ATTEMPTS) return 0;
+  return Math.min(PIN_BASE_DELAY_MS * 2 ** (fails - PIN_FREE_ATTEMPTS), PIN_MAX_DELAY_MS);
+}
+function getPinFails() { return Math.max(0, parseInt(localStorage.getItem(LS_KEYS.pinFails), 10) || 0); }
+// Temps d'attente restant (0 si aucune attente). Une date d'attente aberrante (horloge du téléphone reculée,
+// valeur modifiée) est ramenée à l'attente maximale pour ne jamais bloquer l'appli indéfiniment.
+function pinLockRemainingMs(now = Date.now()) {
+  let until = parseInt(localStorage.getItem(LS_KEYS.pinLockUntil), 10) || 0;
+  if (until - now > PIN_MAX_DELAY_MS) { until = now + PIN_MAX_DELAY_MS; localStorage.setItem(LS_KEYS.pinLockUntil, String(until)); }
+  return Math.max(0, until - now);
+}
+// Enregistre un échec et renvoie l'attente imposée (en ms)
+function registerPinFail(now = Date.now()) {
+  const fails = getPinFails() + 1;
+  localStorage.setItem(LS_KEYS.pinFails, String(fails));
+  const delay = pinLockDelayMs(fails);
+  if (delay > 0) localStorage.setItem(LS_KEYS.pinLockUntil, String(now + delay));
+  return delay;
+}
+function resetPinFails() {
+  localStorage.removeItem(LS_KEYS.pinFails);
+  localStorage.removeItem(LS_KEYS.pinLockUntil);
+}
+function fmtWait(ms) {
+  const s = Math.ceil(ms / 1000);
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
 }
 
 /* ---------- Init ---------- */
@@ -2488,6 +2608,7 @@ function bootApp() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }
+  requestPersistentStorage(); // protège les données contre l'effacement automatique (voir la fonction)
 
   let deferredPrompt = null;
   window.addEventListener("beforeinstallprompt", (e) => {
@@ -2505,4 +2626,5 @@ function bootApp() {
   };
 }
 
-document.addEventListener("DOMContentLoaded", init);
+// Sur la page de tests (tests.html), l'appli est chargée sans démarrer : seules ses fonctions sont testées
+if (!window.CARNET_TEST_MODE) document.addEventListener("DOMContentLoaded", init);
