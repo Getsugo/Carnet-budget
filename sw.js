@@ -1,4 +1,4 @@
-const CACHE_NAME = "carnet-budget-v40";
+const CACHE_NAME = "carnet-budget-v41";
 const ASSETS = [
   "./",
   "./index.html",
@@ -28,6 +28,10 @@ self.addEventListener("activate", (event) => {
 // Cache-first, so the app works fully offline after the first visit.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  // La page de tests et ce qu'elle charge (marqué "?nocache=...") passent toujours par le réseau, sans cache :
+  // les tests doivent porter sur la toute dernière version publiée, jamais sur une copie gardée en mémoire.
+  const url = new URL(event.request.url);
+  if (url.pathname.endsWith("/tests.html") || url.searchParams.has("nocache")) return;
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;

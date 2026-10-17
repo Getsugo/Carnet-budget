@@ -45,7 +45,8 @@ if (!window.CARNET_TEST_SAFE) {
   document.getElementById("summary").textContent = "⛔ Tests arrêtés : impossible d'isoler le stockage (tes données ne sont pas touchées).";
   document.getElementById("summary").className = "ko";
 } else {
-  document.write('<script src="app.js"><\/script>');
+  // "?nocache=" : charge toujours la dernière version publiée de l'appli, jamais une copie en mémoire (voir sw.js)
+  document.write('<script src="app.js?nocache=' + Date.now() + '"><\/script>');
 }
 </script>
 
